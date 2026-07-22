@@ -1,10 +1,12 @@
 # src/ui.py
 # BSL SL Automation — Streamlit UI
-# Fix 1: Download buttons persist after clicking (session_state)
-# Fix 2: Files actually generate and appear after automation completes
+# Fix: ModuleNotFoundError on Streamlit Cloud
+# Fix: xlwings disabled on non-Windows
+# Fix: Download buttons persist via session_state
 
 import os
 import io
+import platform
 import streamlit as st
 import logging
 from src.utils import setup_logger, get_output_filename
@@ -16,18 +18,19 @@ from src.encrypt import encrypt_file, decrypt_file, is_encrypted
 
 logger = setup_logger()
 
-PROD_PREFIX = "SPM Productivity & Penetration Report_BSL-early&remedial"
-PTP_PREFIX  = "SPM PTP Monitoring Report_BSL-early"
+PROD_PREFIX  = "SPM Productivity & Penetration Report_BSL-early&remedial"
+PTP_PREFIX   = "SPM PTP Monitoring Report_BSL-early"
+IS_WINDOWS   = platform.system() == "Windows"
 
 
 def _init_session_state():
     """Initialize all session state variables."""
     defaults = {
-        "prod_encrypted":  None,
-        "ptp_encrypted":   None,
-        "prod_filename":   None,
-        "ptp_filename":    None,
-        "automation_done": False,
+        "prod_encrypted":   None,
+        "ptp_encrypted":    None,
+        "prod_filename":    None,
+        "ptp_filename":     None,
+        "automation_done":  False,
         "automation_error": None,
     }
     for key, val in defaults.items():
@@ -42,13 +45,15 @@ def launch_app():
         layout="centered"
     )
 
-    # Initialize session state FIRST before anything else
+    # Initialize session state FIRST
     _init_session_state()
 
     st.title("📊 BSL SL Automation")
     st.markdown("---")
 
-    # --- FILE UPLOADS --- #
+    # ------------------------------------------------------------------ #
+    # FILE UPLOADS
+    # ------------------------------------------------------------------ #
     st.subheader("📁 Upload Input Files")
 
     col1, col2 = st.columns(2)
@@ -56,7 +61,7 @@ def launch_app():
         dialer_file = st.file_uploader(
             "📊 Dialer Report",
             type=["xlsx"],
-            help="DIALER REPORT BSL SL *.xlsx",
+            help="DIALER REPORT BUSINESS LOAN SL *.xlsx",
             key="uploader_dialer"
         )
         drr_file = st.file_uploader(
@@ -81,26 +86,49 @@ def launch_app():
 
     st.markdown("---")
 
-    # --- SETTINGS --- #
+    # ------------------------------------------------------------------ #
+    # SETTINGS
+    # ------------------------------------------------------------------ #
     st.subheader("⚙️ Settings")
-    auto_refresh = st.toggle(
-        "🔄 Auto-refresh Pivot Tables",
-        value=False,
-        help="Requires Microsoft Excel installed locally. Does NOT work on web.",
-        key="toggle_refresh"
-    )
-    if auto_refresh:
-        st.info("✅ Pivot tables will be refreshed automatically via xlwings.")
-    else:
+
+    # Only enable pivot refresh toggle on Windows with Excel
+    if not IS_WINDOWS:
         st.warning(
-            "⚠️ Pivot tables will NOT be refreshed. "
-            "Please refresh manually after opening the files."
+            f"⚠️ Auto-refresh Pivot Tables is only available on Windows "
+            f"with Excel installed. Running on: **{platform.system()}**"
         )
+        auto_refresh = False
+        st.toggle(
+            "🔄 Auto-refresh Pivot Tables",
+            value=False,
+            disabled=True,
+            help="Not available on this platform.",
+            key="toggle_refresh"
+        )
+    else:
+        auto_refresh = st.toggle(
+            "🔄 Auto-refresh Pivot Tables",
+            value=False,
+            help="Requires Microsoft Excel installed locally on Windows.",
+            key="toggle_refresh"
+        )
+        if auto_refresh:
+            st.info(
+                "✅ Pivot tables will be refreshed automatically via xlwings."
+            )
+        else:
+            st.warning(
+                "⚠️ Pivot tables will NOT be refreshed. "
+                "Please refresh manually after opening the files."
+            )
 
     st.markdown("---")
 
-    # --- RUN BUTTON --- #
+    # ------------------------------------------------------------------ #
+    # RUN BUTTON
+    # ------------------------------------------------------------------ #
     all_uploaded = all([dialer_file, drr_file, prod_template, ptp_template])
+
     if not all_uploaded:
         st.info("👆 Please upload all 4 files to proceed.")
 
@@ -115,7 +143,7 @@ def launch_app():
         st.session_state.ptp_encrypted   = None
         st.session_state.prod_filename   = None
         st.session_state.ptp_filename    = None
-        st.session_state.automation_done = False
+        st.session_state.automation_done  = False
         st.session_state.automation_error = None
 
         run_automation(
@@ -124,21 +152,27 @@ def launch_app():
             auto_refresh
         )
 
-    # --- DOWNLOAD SECTION (persists via session_state) --- #
-    # This renders OUTSIDE run_automation so it
-    # survives Streamlit reruns from download clicks [5]
+    # ------------------------------------------------------------------ #
+    # DOWNLOAD SECTION — persists via session_state
+    # Rendered OUTSIDE run_automation so it survives reruns
+    # from download button clicks
+    # ------------------------------------------------------------------ #
     if st.session_state.automation_done:
+        st.markdown("---")
+
         if st.session_state.automation_error:
             st.error(
-                f"❌ Automation failed: {st.session_state.automation_error}"
+                f"❌ Automation failed: "
+                f"{st.session_state.automation_error}"
             )
         elif (
             st.session_state.prod_encrypted is not None and
             st.session_state.ptp_encrypted  is not None
         ):
-            st.markdown("---")
             st.subheader("📥 Download Output Files")
-            st.success("✅ Automation complete! Download your files below.")
+            st.success(
+                "✅ Automation complete! Download your files below."
+            )
 
             col1, col2 = st.columns(2)
             with col1:
@@ -174,41 +208,47 @@ def launch_app():
 def run_automation(
     dialer_file, drr_file,
     prod_template, ptp_template,
-    auto_refresh
+    auto_refresh: bool
 ):
     """Main automation runner with progress tracking."""
 
-    progress  = st.progress(0)
-    status    = st.empty()
+    progress = st.progress(0)
+    status   = st.empty()
 
     try:
-        # STEP 1: Extract Dialer Data
+        # ---------------------------------------------------------- #
+        # STEP 1: Extract Dialer Data [1]
+        # ---------------------------------------------------------- #
         status.info("📊 Step 1/6: Extracting Dialer Report data...")
         dialer_bytes = io.BytesIO(dialer_file.read())
         if is_encrypted(dialer_bytes):
             logger.info("Dialer file encrypted. Decrypting...")
             dialer_bytes = decrypt_file(dialer_bytes)
         dialer_df = extract_dialer_data(dialer_bytes)
-        logger.info(f"Dialer rows: {len(dialer_df)}")
+        logger.info(f"Dialer rows extracted: {len(dialer_df)}")
         progress.progress(15)
 
-        # STEP 2: Clean DRR
+        # ---------------------------------------------------------- #
+        # STEP 2: Clean DRR [3]
+        # ---------------------------------------------------------- #
         status.info("🧹 Step 2/6: Cleaning Daily Remark Report...")
         drr_bytes = io.BytesIO(drr_file.read())
         if is_encrypted(drr_bytes):
             logger.info("DRR file encrypted. Decrypting...")
             drr_bytes = decrypt_file(drr_bytes)
-        clean_df              = clean_drr(drr_bytes)
+        clean_df                = clean_drr(drr_bytes)
         remedial_raw, early_raw = split_drr(clean_df)
-        remedial_df           = map_remedial(remedial_raw)
-        early_df              = map_early(early_raw)
+        remedial_df             = map_remedial(remedial_raw)
+        early_df                = map_early(early_raw)
         logger.info(
             f"Remedial rows: {len(remedial_df)} | "
             f"Early rows: {len(early_df)}"
         )
         progress.progress(35)
 
-        # STEP 3: Populate Productivity Template
+        # ---------------------------------------------------------- #
+        # STEP 3: Populate Productivity Template [4]
+        # ---------------------------------------------------------- #
         status.info("📄 Step 3/6: Populating Productivity Report...")
         prod_bytes = io.BytesIO(prod_template.read())
         if is_encrypted(prod_bytes):
@@ -220,7 +260,9 @@ def run_automation(
         logger.info("Productivity template populated.")
         progress.progress(55)
 
-        # STEP 4: Populate PTP Monitoring
+        # ---------------------------------------------------------- #
+        # STEP 4: Populate PTP Monitoring [2]
+        # ---------------------------------------------------------- #
         status.info("📋 Step 4/6: Populating PTP Monitoring Report...")
         ptp_bytes = io.BytesIO(ptp_template.read())
         if is_encrypted(ptp_bytes):
@@ -233,17 +275,26 @@ def run_automation(
         logger.info(f"PTP rows pasted: {len(ptp_df)}")
         progress.progress(70)
 
-        # STEP 5: Pivot Refresh
-        if auto_refresh:
-            status.info("🔄 Step 5/6: Refreshing pivot tables via xlwings...")
+        # ---------------------------------------------------------- #
+        # STEP 5: Pivot Refresh (Windows + Toggle ON only)
+        # ---------------------------------------------------------- #
+        if auto_refresh and IS_WINDOWS:
+            status.info(
+                "🔄 Step 5/6: Refreshing pivot tables via xlwings..."
+            )
             prod_out.seek(0)
             ptp_out.seek(0)
             _refresh_with_xlwings(prod_out, ptp_out)
+            logger.info("Pivot refresh completed.")
         else:
-            status.info("⏭️ Step 5/6: Skipping pivot refresh (manual mode)...")
+            status.info(
+                "⏭️ Step 5/6: Skipping pivot refresh (manual mode)..."
+            )
         progress.progress(85)
 
-        # STEP 6: Encrypt
+        # ---------------------------------------------------------- #
+        # STEP 6: Encrypt & Store in session_state
+        # ---------------------------------------------------------- #
         status.info("🔐 Step 6/6: Encrypting output files...")
         prod_out.seek(0)
         ptp_out.seek(0)
@@ -251,28 +302,31 @@ def run_automation(
         ptp_encrypted  = encrypt_file(ptp_out)
         progress.progress(100)
 
-        # Store bytes in session_state
-        # Read as bytes so download_button works after reruns [5]
+        # Read as bytes — required for download_button persistence
         prod_data = prod_encrypted.read()
         ptp_data  = ptp_encrypted.read()
 
         if not prod_data:
-            raise ValueError("Productivity file is empty after encryption!")
+            raise ValueError(
+                "Productivity file is empty after encryption!"
+            )
         if not ptp_data:
-            raise ValueError("PTP file is empty after encryption!")
+            raise ValueError(
+                "PTP file is empty after encryption!"
+            )
 
+        # Store in session_state so downloads persist after reruns
         st.session_state.prod_encrypted  = prod_data
         st.session_state.ptp_encrypted   = ptp_data
         st.session_state.prod_filename   = get_output_filename(PROD_PREFIX)
         st.session_state.ptp_filename    = get_output_filename(PTP_PREFIX)
-        st.session_state.automation_done = True
+        st.session_state.automation_done  = True
         st.session_state.automation_error = None
 
         logger.info(
-            f"Prod file size: {len(prod_data)} bytes | "
-            f"PTP file size: {len(ptp_data)} bytes"
+            f"Prod file: {len(prod_data)} bytes | "
+            f"PTP file: {len(ptp_data)} bytes"
         )
-
         status.success(
             "✅ Automation complete! Scroll down to download your files."
         )
@@ -286,10 +340,13 @@ def run_automation(
         logger.error(f"Automation error: {e}", exc_info=True)
 
 
-def _refresh_with_xlwings(prod_bytes: io.BytesIO, ptp_bytes: io.BytesIO):
+def _refresh_with_xlwings(
+    prod_bytes: io.BytesIO,
+    ptp_bytes: io.BytesIO
+):
     """
     Saves BytesIO to temp files, refreshes pivots via xlwings, reloads.
-    Only works locally with Excel installed.
+    Only called on Windows with Excel installed.
     """
     import tempfile
     from src.pivot import refresh_pivots
@@ -321,6 +378,7 @@ def _refresh_with_xlwings(prod_bytes: io.BytesIO, ptp_bytes: io.BytesIO):
             ptp_bytes.write(f.read())
             ptp_bytes.truncate()
             ptp_bytes.seek(0)
+
     finally:
         if os.path.exists(tmp_prod_path):
             os.remove(tmp_prod_path)
