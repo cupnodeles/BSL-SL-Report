@@ -1,0 +1,42 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.Python
+*.egg
+*.egg-info/
+dist/
+build/
+.eggs/
+
+# Virtual Environment
+venv/
+env/
+.venv/
+.env/
+
+# Streamlit
+.streamlit/
+
+# Logs
+logs/
+*.log
+*.txt
+
+# Excel output files
+output/
+*.xlsx
+
+# Config (contains sensitive paths)
+config.json
+
+# OS
+.DS_Store
+Thumbs.db
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
