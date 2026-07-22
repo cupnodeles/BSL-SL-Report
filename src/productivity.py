@@ -1,5 +1,5 @@
 # src/productivity.py
-# BPI BL SL Automation — Productivity Template Population
+# BSL SL Automation — Productivity Template Population
 # Fix: Compatible table access for all openpyxl versions
 # Fix: Unique table names across all sheets
 # Fix: Re-create tables after paste to restore pivot references [5]
@@ -13,7 +13,7 @@ from openpyxl.worksheet.table import Table, TableStyleInfo
 from openpyxl.utils import get_column_letter
 import logging
 
-logger = logging.getLogger("BPI_BL_SL")
+logger = logging.getLogger("BSL_SL")
 
 SHEET_PENETRATION        = "Penetration Per Day"
 SHEET_EARLY              = "Stat Result - BL Early SL"

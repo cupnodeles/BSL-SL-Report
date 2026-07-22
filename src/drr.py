@@ -1,12 +1,12 @@
 # src/drr.py
-# BPI BL SL Automation — Daily Remark Report Cleaning & Mapping
+# BSL SL Automation — Daily Remark Report Cleaning & Mapping
 # Source: Daily_Remark_Report*.xlsx [3]
 
 import pandas as pd
 import numpy as np
 import logging
 
-logger = logging.getLogger("BPI_BL_SL")
+logger = logging.getLogger("BSL_SL")
 
 # Remark By values to delete [3]
 REMARK_BY_DELETE = ["TLEYVA", "ZMONTANO"]
@@ -122,8 +122,8 @@ def clean_drr(file) -> pd.DataFrame:
 def split_drr(df: pd.DataFrame):
     """
     Splits cleaned DRR into Remedial and Early SL DataFrames.
-    Remedial : Batch No starts with 'BPI BUSINESS LOAN REMEDIAL' [3]
-    Early SL : Everything else e.g. BPI BL EARLY SL_01/07/2026 [3]
+    Remedial : Batch No starts with 'BSL SL REMEDIAL' [3]
+    Early SL : Everything else e.g. BSL SL EARLY SL_01/07/2026 [3]
     Returns (remedial_df, early_df)
     """
     df["Batch No"] = _safe_str(df["Batch No"])

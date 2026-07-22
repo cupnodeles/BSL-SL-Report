@@ -1,5 +1,5 @@
 # src/utils.py
-# BPI BL SL Automation — Shared Helpers
+# BSL SL Automation — Shared Helpers
 
 import os
 import logging
@@ -57,4 +57,4 @@ def setup_logger(log_dir: str = "logs") -> logging.Logger:
             logging.StreamHandler()
         ]
     )
-    return logging.getLogger("BPI_BL_SL")
+    return logging.getLogger("BSL_SL")

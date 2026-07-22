@@ -1,5 +1,5 @@
 # tests/test_ptp.py
-# BPI BL SL Automation — PTP Monitoring Tests
+# BSL SL Automation — PTP Monitoring Tests
 
 import pytest
 import pandas as pd

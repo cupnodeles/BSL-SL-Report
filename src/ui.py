@@ -1,5 +1,5 @@
 # src/ui.py
-# BPI BL SL Automation — Streamlit UI
+# BSL SL Automation — Streamlit UI
 # Fix 1: Download buttons persist after clicking (session_state)
 # Fix 2: Files actually generate and appear after automation completes
 
@@ -37,7 +37,7 @@ def _init_session_state():
 
 def launch_app():
     st.set_page_config(
-        page_title="BPI BL SL Automation",
+        page_title="BSL SL Automation",
         page_icon="📊",
         layout="centered"
     )
@@ -45,7 +45,7 @@ def launch_app():
     # Initialize session state FIRST before anything else
     _init_session_state()
 
-    st.title("📊 BPI BL SL Automation")
+    st.title("📊 BSL SL Automation")
     st.markdown("---")
 
     # --- FILE UPLOADS --- #
@@ -56,7 +56,7 @@ def launch_app():
         dialer_file = st.file_uploader(
             "📊 Dialer Report",
             type=["xlsx"],
-            help="DIALER REPORT BPI BUSINESS LOAN SL *.xlsx",
+            help="DIALER REPORT BSL SL *.xlsx",
             key="uploader_dialer"
         )
         drr_file = st.file_uploader(

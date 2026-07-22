@@ -1,11 +1,11 @@
 # src/pivot.py
-# BPI BL SL Automation — xlwings Pivot Refresh (Local Only)
+# BSL SL Automation — xlwings Pivot Refresh (Local Only)
 # Only called when Toggle is ON in the UI
 # Requires: Microsoft Excel installed on local machine
 
 import logging
 
-logger = logging.getLogger("BPI_BSL_SL")
+logger = logging.getLogger("BSL_SL")
 
 
 def refresh_pivots(filepath: str) -> None:

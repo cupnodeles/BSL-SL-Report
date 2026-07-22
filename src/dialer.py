@@ -1,13 +1,13 @@
 # src/dialer.py
-# BPI BL SL Automation — Dialer Report Processing
-# Source: DIALER REPORT BPI BUSINESS LOAN SL *.xlsx [1]
+# BSL SL Automation — Dialer Report Processing
+# Source: DIALER REPORT BSL SL *.xlsx [1]
 # Sheet:  Overall Combined Summary
 # Extracts 19 columns: DATE to CALL DROP RATE (excludes CYCLE)
 
 import pandas as pd
 import logging
 
-logger = logging.getLogger("BPI_BL_SL")
+logger = logging.getLogger("BSL_SL")
 
 DIALER_SHEET = "Overall Combined Summary"
 

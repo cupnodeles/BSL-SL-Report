@@ -1,5 +1,5 @@
 # src/ptp.py
-# BPI BL SL Automation — PTP Monitoring Report
+# BSL SL Automation — PTP Monitoring Report
 # Template: SPM PTP Monitoring Report_BSL-early_*.xlsx [2]
 
 import io
@@ -8,7 +8,7 @@ import openpyxl
 import logging
 from src.utils import get_last_row
 
-logger = logging.getLogger("BPI_BL_SL")
+logger = logging.getLogger("BSL_SL")
 
 PTP_STATUS_PREFIX  = "PTP"
 SHEET_EARLY        = "Stat Result - BL Early SL"

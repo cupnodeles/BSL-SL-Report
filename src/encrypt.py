@@ -1,5 +1,5 @@
 # src/encrypt.py
-# BPI BL SL Automation — File Open Password Encryption & Decryption
+# BSL SL Automation — File Open Password Encryption & Decryption
 # Password: SPM*123
 # Uses msoffcrypto-tool
 
@@ -7,7 +7,7 @@ import io
 import msoffcrypto
 import logging
 
-logger = logging.getLogger("BPI_BL_SL")
+logger = logging.getLogger("BSL_SL")
 
 PASSWORD = "SPM*123"
 

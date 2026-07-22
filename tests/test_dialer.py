@@ -1,5 +1,5 @@
 # tests/test_dialer.py
-# BPI BL SL Automation — Dialer Report Tests
+# BSL SL Automation — Dialer Report Tests
 
 import pytest
 import pandas as pd

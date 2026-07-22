@@ -23,6 +23,8 @@ env/
 logs/
 *.log
 *.txt
+docs/
+tests/
 
 # Excel output files
 output/
