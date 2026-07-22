@@ -42,7 +42,7 @@ def test_clean_drr_removes_remark_starts_with():
 
 
 def test_split_drr_remedial_vs_early():
-    """Remedial rows should have Batch No starting with BPI BUSINESS LOAN REMEDIAL."""
+    """Remedial rows should have Batch No starting with BSL BUSINESS LOAN REMEDIAL."""
     df = pd.DataFrame({
         "Batch No": [
             "BPI BUSINESS LOAN REMEDIAL_01/2026",
