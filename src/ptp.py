@@ -1,7 +1,8 @@
 # src/ptp.py
 # BPI BL SL Automation — PTP Monitoring Report
-# Fix: Read Stat Result sheets by column POSITION not by header name
-# since data is pasted positionally (A B C D)
+# Fix: Correctly read Stat Result sheets after positional paste
+# Fix: BytesIO position reset before reading
+# Fix: Column matching by header name after finding header row
 
 import io
 import pandas as pd
@@ -12,27 +13,6 @@ from src.utils import get_last_row
 logger = logging.getLogger("BPI_BL_SL")
 
 PTP_STATUS_PREFIX = "PTP"
-
-# Column position mapping for Stat Result sheets [4][5]
-# These are the column positions (0-indexed) after positional paste
-# Based on confirmed headers: Date, Time, Name, LAN, Status,
-# Remark, Remark By, PTP Amount, PTP Date, Payment Amount,
-# Payment Date, Dialed Number, Bucket (Early only)
-STAT_RESULT_COL_POSITIONS = {
-    "Date":           0,
-    "Time":           1,
-    "Name":           2,
-    "LAN":            3,
-    "Status":         4,
-    "Remark":         5,
-    "Remark By":      6,
-    "PTP Amount":     7,
-    "PTP Date":       8,
-    "Payment Amount": 9,
-    "Payment Date":   10,
-    "Dialed Number":  11,
-    "Bucket":         12,
-}
 
 # Column mapping: Stat Result -> PTP Monitoring [2]
 PTP_COLUMN_MAP = {
@@ -54,42 +34,36 @@ def _find_sheet(wb, keywords: list) -> str:
     """
     Dynamically finds a sheet by checking if any keyword
     is contained in the sheet name (case-insensitive).
+    Tries exact match first, then partial.
     """
     logger.info(f"Available sheets: {wb.sheetnames}")
+
+    # Exact match first
+    for name in keywords:
+        if name in wb.sheetnames:
+            logger.info(f"Exact match: '{name}'")
+            return name
+
+    # Partial match
     for sheet_name in wb.sheetnames:
         for keyword in keywords:
             if keyword.lower() in sheet_name.lower():
-                logger.info(f"Matched sheet '{sheet_name}' with keyword '{keyword}'")
+                logger.info(f"Partial match '{keyword}' -> '{sheet_name}'")
                 return sheet_name
+
     raise ValueError(
         f"Could not find sheet with keywords {keywords}. "
-        f"Available sheets: {wb.sheetnames}"
+        f"Available: {wb.sheetnames}"
     )
 
 
-def _find_header_row(ws, keys: list) -> int:
+def _sheet_to_df_positional(ws) -> pd.DataFrame:
     """
-    Finds the row index (1-based) containing ALL keys as cell values.
-    Returns that row index. Returns 1 if not found.
-    """
-    for row_idx, row in enumerate(
-        ws.iter_rows(min_row=1, max_row=ws.max_row, values_only=True),
-        start=1
-    ):
-        row_vals = [str(v).strip() if v is not None else "" for v in row]
-        if all(k in row_vals for k in keys):
-            logger.info(f"Header row found at row {row_idx} in '{ws.title}'")
-            return row_idx
-    logger.warning(f"Header row not found in '{ws.title}'. Using row 1.")
-    return 1
-
-
-def _sheet_to_df_by_header(ws) -> pd.DataFrame:
-    """
-    Reads a worksheet into DataFrame using the ACTUAL header row.
-    Finds the header row dynamically by looking for Date + Status + Name.
-    This handles sheets where data starts after row 1 due to pivot tables.
-    Deduplicates column names to prevent reindexing errors.
+    Reads worksheet into DataFrame.
+    Finds the actual header row by scanning for Date + Time + Name + LAN + Status.
+    Uses those headers to name the columns.
+    This correctly handles sheets where data was pasted positionally (A B C D)
+    but the header row still has proper names [4][5].
     """
     all_rows = list(ws.iter_rows(min_row=1, max_row=ws.max_row, values_only=True))
 
@@ -97,24 +71,35 @@ def _sheet_to_df_by_header(ws) -> pd.DataFrame:
         logger.warning(f"Sheet '{ws.title}' is empty.")
         return pd.DataFrame()
 
-    # Find header row
-    header_row_idx = 0
+    # Find header row — look for row with Date + Status + Name
+    header_idx = None
     for idx, row in enumerate(all_rows):
         row_vals = [str(v).strip() if v is not None else "" for v in row]
-        if "Date" in row_vals and "Status" in row_vals and "Name" in row_vals:
-            header_row_idx = idx
+        if (
+            "Date"   in row_vals and
+            "Status" in row_vals and
+            "Name"   in row_vals
+        ):
+            header_idx = idx
             logger.info(
                 f"Header row found at index {idx} "
-                f"(row {idx + 1}) in '{ws.title}'"
+                f"(row {idx + 1}) in '{ws.title}': "
+                f"{row_vals[:8]}"
             )
             break
 
+    if header_idx is None:
+        logger.warning(
+            f"No header row found in '{ws.title}'. "
+            f"Using row 0 as header."
+        )
+        header_idx = 0
+
+    # Build headers — deduplicate
     raw_headers = [
         str(h).strip() if h is not None else ""
-        for h in all_rows[header_row_idx]
+        for h in all_rows[header_idx]
     ]
-
-    # Deduplicate column names
     seen    = {}
     headers = []
     for h in raw_headers:
@@ -125,13 +110,17 @@ def _sheet_to_df_by_header(ws) -> pd.DataFrame:
             seen[h] = 0
             headers.append(h)
 
-    logger.info(f"Sheet '{ws.title}' headers: {headers}")
+    logger.info(f"'{ws.title}' headers: {headers}")
 
-    data_rows = all_rows[header_row_idx + 1:]
+    # Build DataFrame from data rows only
+    data_rows = all_rows[header_idx + 1:]
     if not data_rows:
+        logger.warning(f"No data rows in '{ws.title}'.")
         return pd.DataFrame(columns=headers)
 
     df = pd.DataFrame(data_rows, columns=headers)
+
+    # Fill NaN and convert to string
     df = df.fillna("").astype(str)
     for col in df.columns:
         df[col] = df[col].str.strip()
@@ -141,7 +130,7 @@ def _sheet_to_df_by_header(ws) -> pd.DataFrame:
         df.apply(lambda row: any(v != "" for v in row), axis=1)
     ].reset_index(drop=True)
 
-    logger.info(f"Sheet '{ws.title}' loaded: {len(df)} data rows.")
+    logger.info(f"'{ws.title}': {len(df)} data rows loaded.")
     return df
 
 
@@ -150,13 +139,13 @@ def _find_ptp_data_sheet(wb) -> str:
     Finds the PTP data sheet in the PTP Monitoring template [2].
     Priority:
     1. Exact 'PTP List'
-    2. Keyword match containing 'PTP'
+    2. Keyword match containing 'PTP' or 'List'
     3. Header scan for Date + Name + LAN + Status
     4. First sheet fallback
     """
-    logger.info(f"Searching PTP sheet among: {wb.sheetnames}")
+    logger.info(f"PTP template sheets: {wb.sheetnames}")
 
-    # Priority 1: Exact match
+    # Priority 1: Exact 'PTP List' [2]
     if "PTP List" in wb.sheetnames:
         logger.info("Found: 'PTP List'")
         return "PTP List"
@@ -165,7 +154,7 @@ def _find_ptp_data_sheet(wb) -> str:
     for sheet_name in wb.sheetnames:
         for keyword in ["PTP List", "PTP", "List", "Monitoring"]:
             if keyword.lower() in sheet_name.lower():
-                logger.info(f"Found PTP sheet by keyword: '{sheet_name}'")
+                logger.info(f"Found by keyword '{keyword}': '{sheet_name}'")
                 return sheet_name
 
     # Priority 3: Header scan
@@ -182,7 +171,7 @@ def _find_ptp_data_sheet(wb) -> str:
                 "LAN"    in row_vals and
                 "Status" in row_vals
             ):
-                logger.info(f"Found PTP sheet by header: '{sheet_name}'")
+                logger.info(f"Found by header scan: '{sheet_name}'")
                 return sheet_name
 
     # Priority 4: First sheet
@@ -195,39 +184,43 @@ def extract_ptp_rows(prod_bytes: io.BytesIO) -> pd.DataFrame:
     """
     Reads the saved Productivity BytesIO [4][5].
     Finds Early SL and Remedial SL sheets dynamically.
-    Reads data using actual header row (not positional).
+    Reads using actual header row found by scanning.
     Filters rows where Status starts with 'PTP'.
-    Returns combined PTP DataFrame mapped to PTP Monitoring columns [2].
+    Returns combined mapped DataFrame for PTP Monitoring [2].
     """
     logger.info("Extracting PTP rows from Productivity Report...")
 
+    # CRITICAL: Always seek to start before reading
     prod_bytes.seek(0)
-    wb = openpyxl.load_workbook(prod_bytes)
+    wb = openpyxl.load_workbook(prod_bytes, data_only=True)
     logger.info(f"Productivity sheets: {wb.sheetnames}")
 
     # Find Early SL sheet [4]
     early_sheet = _find_sheet(wb, [
         "Stat Result - BL Early SL",
         "Early SL",
-        "Early",
-        "BL Early"
+        "BL Early",
+        "Early"
     ])
 
     # Find Remedial SL sheet [4]
     remedial_sheet = _find_sheet(wb, [
         "Stat Result - BL Remedial SL",
         "Remedial SL",
-        "Remedial",
-        "BL Remedial"
+        "BL Remedial",
+        "Remedial"
     ])
 
-    early_df    = _sheet_to_df_by_header(wb[early_sheet])
-    remedial_df = _sheet_to_df_by_header(wb[remedial_sheet])
+    logger.info(f"Reading Early SL: '{early_sheet}'")
+    early_df    = _sheet_to_df_positional(wb[early_sheet])
 
-    logger.info(f"Early SL columns: {list(early_df.columns)}")
-    logger.info(f"Remedial columns: {list(remedial_df.columns)}")
+    logger.info(f"Reading Remedial SL: '{remedial_sheet}'")
+    remedial_df = _sheet_to_df_positional(wb[remedial_sheet])
+
+    logger.info(f"Early SL cols: {list(early_df.columns)}")
+    logger.info(f"Remedial cols: {list(remedial_df.columns)}")
     logger.info(
-        f"Early SL rows: {len(early_df)} | "
+        f"Early rows: {len(early_df)} | "
         f"Remedial rows: {len(remedial_df)}"
     )
 
@@ -237,13 +230,13 @@ def extract_ptp_rows(prod_bytes: io.BytesIO) -> pd.DataFrame:
 
     # Add Status if missing
     if "Status" not in early_df.columns:
-        logger.warning("'Status' not in Early SL. Adding empty.")
+        logger.warning("'Status' missing in Early SL — adding empty.")
         early_df["Status"] = ""
     if "Status" not in remedial_df.columns:
-        logger.warning("'Status' not in Remedial SL. Adding empty.")
+        logger.warning("'Status' missing in Remedial SL — adding empty.")
         remedial_df["Status"] = ""
 
-    # Align columns before concat
+    # Align columns before concat to avoid reindexing error
     all_cols    = list(dict.fromkeys(
         list(early_df.columns) + list(remedial_df.columns)
     ))
@@ -252,12 +245,15 @@ def extract_ptp_rows(prod_bytes: io.BytesIO) -> pd.DataFrame:
 
     combined = pd.concat([early_df, remedial_df], ignore_index=True)
     logger.info(f"Combined rows: {len(combined)}")
-    logger.info(f"Combined columns: {list(combined.columns)}")
 
-    # Fill and clean Status column
+    # Clean Status
     combined["Status"] = (
         combined["Status"].fillna("").astype(str).str.strip()
     )
+
+    # Log sample statuses for debugging
+    sample_statuses = combined["Status"].unique()[:15].tolist()
+    logger.info(f"Sample statuses: {sample_statuses}")
 
     # Filter PTP rows
     ptp_mask = combined["Status"].str.upper().str.startswith(
@@ -268,34 +264,35 @@ def extract_ptp_rows(prod_bytes: io.BytesIO) -> pd.DataFrame:
 
     if len(ptp_df) == 0:
         logger.warning(
-            "No PTP rows found! Check if Status column contains "
-            "PTP values. Sample statuses: "
-            f"{combined['Status'].unique()[:10].tolist()}"
+            f"NO PTP rows found! "
+            f"Sample statuses were: {sample_statuses}"
         )
 
-    # Map columns to PTP Monitoring [2]
+    # Map columns to PTP Monitoring template [2]
     mapped = pd.DataFrame()
     for src_col, dst_col in PTP_COLUMN_MAP.items():
         if src_col in ptp_df.columns:
             mapped[dst_col] = ptp_df[src_col].values
         else:
-            logger.warning(
-                f"Column '{src_col}' not found in Stat Result. "
-                f"Filling empty."
-            )
+            logger.warning(f"'{src_col}' not found — filling empty.")
             mapped[dst_col] = ""
 
-    logger.info(f"Mapped PTP columns: {list(mapped.columns)}")
+    logger.info(f"Mapped PTP cols: {list(mapped.columns)}")
+    logger.info(f"Mapped PTP rows: {len(mapped)}")
     return mapped.reset_index(drop=True)
 
 
 def populate_ptp(template_file, ptp_df: pd.DataFrame) -> io.BytesIO:
     """
-    Appends PTP rows to the bottom of the PTP data sheet [2].
-    Finds the correct sheet and header row dynamically.
+    Appends PTP rows to the bottom of 'PTP List' sheet [2].
+    Finds header row in PTP sheet dynamically.
+    Pastes data by matching column positions to header names.
     Returns modified workbook as BytesIO.
     """
     logger.info("Loading PTP Monitoring Template...")
+
+    if isinstance(template_file, io.BytesIO):
+        template_file.seek(0)
 
     wb = openpyxl.load_workbook(template_file)
     logger.info(f"PTP template sheets: {wb.sheetnames}")
@@ -305,24 +302,54 @@ def populate_ptp(template_file, ptp_df: pd.DataFrame) -> io.BytesIO:
     logger.info(f"Using PTP sheet: '{sheet_name}'")
 
     # Find header row in PTP sheet
-    header_row = _find_header_row(ws, ["Date", "Name", "LAN", "Status"])
-    last_row   = get_last_row(ws)
+    all_rows   = list(ws.iter_rows(min_row=1, max_row=ws.max_row, values_only=True))
+    header_idx = 0
+    for idx, row in enumerate(all_rows):
+        row_vals = [str(v).strip() if v is not None else "" for v in row]
+        if "Date" in row_vals and "Name" in row_vals and "LAN" in row_vals:
+            header_idx = idx
+            logger.info(f"PTP header row at index {idx} (row {idx+1})")
+            break
 
-    # Use the greater of header_row or last_row to find next empty row
-    next_row   = max(last_row, header_row) + 1
+    header_row  = header_idx + 1  # 1-based
+    ptp_headers = [
+        str(h).strip() if h is not None else ""
+        for h in all_rows[header_idx]
+    ]
+    logger.info(f"PTP sheet headers: {ptp_headers}")
+
+    # Find last data row strictly below header
+    last_data_row = header_row
+    for row_idx in range(header_row + 1, ws.max_row + 1):
+        cell_val = ws.cell(row=row_idx, column=1).value
+        if cell_val is not None and str(cell_val).strip() != "":
+            last_data_row = row_idx
+
+    next_row = last_data_row + 1
     logger.info(
         f"Header at row {header_row} | "
-        f"Last data row: {last_row} | "
+        f"Last data row: {last_data_row} | "
         f"Pasting at row: {next_row}"
     )
 
-    logger.info(f"Pasting {len(ptp_df)} PTP rows at row {next_row}...")
+    # Build column index map: header_name -> col_index (1-based)
+    col_index_map = {
+        name: idx + 1
+        for idx, name in enumerate(ptp_headers)
+        if name
+    }
+    logger.info(f"PTP col index map: {col_index_map}")
 
-    for r_idx, row in enumerate(
+    # Paste PTP rows
+    logger.info(f"Pasting {len(ptp_df)} PTP rows at row {next_row}...")
+    for r_idx, row_data in enumerate(
         ptp_df.itertuples(index=False), start=next_row
     ):
-        for c_idx, value in enumerate(row, start=1):
-            ws.cell(row=r_idx, column=c_idx).value = value
+        row_dict = dict(zip(ptp_df.columns, row_data))
+        for col_name, value in row_dict.items():
+            if col_name in col_index_map:
+                c_idx = col_index_map[col_name]
+                ws.cell(row=r_idx, column=c_idx).value = value
 
     output = io.BytesIO()
     wb.save(output)

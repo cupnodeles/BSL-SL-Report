@@ -268,13 +268,16 @@ def run_automation(
         if is_encrypted(ptp_bytes):
             logger.info("PTP template encrypted. Decrypting...")
             ptp_bytes = decrypt_file(ptp_bytes)
+
+        # CRITICAL: Reset prod_out position before passing to extract_ptp_rows
         prod_out.seek(0)
-        ptp_df  = extract_ptp_rows(prod_out)
+        ptp_df = extract_ptp_rows(prod_out)
+
+        # CRITICAL: Reset again before populating productivity output
         prod_out.seek(0)
         ptp_out = populate_ptp(ptp_bytes, ptp_df)
         logger.info(f"PTP rows pasted: {len(ptp_df)}")
         progress.progress(70)
-
         # ---------------------------------------------------------- #
         # STEP 5: Pivot Refresh (Windows + Toggle ON only)
         # ---------------------------------------------------------- #
