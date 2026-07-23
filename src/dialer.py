@@ -9,7 +9,7 @@ import logging
 
 logger = logging.getLogger("BSL_SL")
 
-DIALER_SHEET = "Overall Combined Summary"
+DIALER_SHEET = "Combined"
 
 DIALER_COLUMNS = [
     "DATE", "CLIENT", "ACCOUNTS", "TOTAL DIALED",
