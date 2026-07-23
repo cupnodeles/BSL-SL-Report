@@ -1,10 +1,11 @@
 # src/ptp.py
 # BPI BL SL Automation — PTP Monitoring Report
-# Fix: Correctly read Stat Result sheets after positional paste
+# Fix: Copy row format from row above when pasting PTP rows [2]
+# Fix: Correctly read Stat Result sheets after positional paste [4][5]
 # Fix: BytesIO position reset before reading
-# Fix: Column matching by header name after finding header row
 
 import io
+import copy
 import pandas as pd
 import openpyxl
 import logging
@@ -32,9 +33,8 @@ PTP_COLUMN_MAP = {
 
 def _find_sheet(wb, keywords: list) -> str:
     """
-    Dynamically finds a sheet by checking if any keyword
-    is contained in the sheet name (case-insensitive).
-    Tries exact match first, then partial.
+    Dynamically finds a sheet by exact name first, then partial match.
+    Logs all available sheets.
     """
     logger.info(f"Available sheets: {wb.sheetnames}")
 
@@ -62,8 +62,9 @@ def _sheet_to_df_positional(ws) -> pd.DataFrame:
     Reads worksheet into DataFrame.
     Finds the actual header row by scanning for Date + Time + Name + LAN + Status.
     Uses those headers to name the columns.
-    This correctly handles sheets where data was pasted positionally (A B C D)
-    but the header row still has proper names [4][5].
+    Handles sheets where data was pasted positionally (A B C D) [4][5].
+    Deduplicates column names to prevent reindexing errors.
+    Removes completely empty rows.
     """
     all_rows = list(ws.iter_rows(min_row=1, max_row=ws.max_row, values_only=True))
 
@@ -71,7 +72,7 @@ def _sheet_to_df_positional(ws) -> pd.DataFrame:
         logger.warning(f"Sheet '{ws.title}' is empty.")
         return pd.DataFrame()
 
-    # Find header row — look for row with Date + Status + Name
+    # Find header row
     header_idx = None
     for idx, row in enumerate(all_rows):
         row_vals = [str(v).strip() if v is not None else "" for v in row]
@@ -95,7 +96,7 @@ def _sheet_to_df_positional(ws) -> pd.DataFrame:
         )
         header_idx = 0
 
-    # Build headers — deduplicate
+    # Build headers with deduplication
     raw_headers = [
         str(h).strip() if h is not None else ""
         for h in all_rows[header_idx]
@@ -119,8 +120,6 @@ def _sheet_to_df_positional(ws) -> pd.DataFrame:
         return pd.DataFrame(columns=headers)
 
     df = pd.DataFrame(data_rows, columns=headers)
-
-    # Fill NaN and convert to string
     df = df.fillna("").astype(str)
     for col in df.columns:
         df[col] = df[col].str.strip()
@@ -136,7 +135,7 @@ def _sheet_to_df_positional(ws) -> pd.DataFrame:
 
 def _find_ptp_data_sheet(wb) -> str:
     """
-    Finds the PTP data sheet in the PTP Monitoring template [2].
+    Finds the PTP data sheet in PTP Monitoring template [2].
     Priority:
     1. Exact 'PTP List'
     2. Keyword match containing 'PTP' or 'List'
@@ -174,7 +173,7 @@ def _find_ptp_data_sheet(wb) -> str:
                 logger.info(f"Found by header scan: '{sheet_name}'")
                 return sheet_name
 
-    # Priority 4: First sheet
+    # Priority 4: First sheet fallback
     fallback = wb.sheetnames[0]
     logger.warning(f"Falling back to first sheet: '{fallback}'")
     return fallback
@@ -265,7 +264,7 @@ def extract_ptp_rows(prod_bytes: io.BytesIO) -> pd.DataFrame:
     if len(ptp_df) == 0:
         logger.warning(
             f"NO PTP rows found! "
-            f"Sample statuses were: {sample_statuses}"
+            f"Sample statuses: {sample_statuses}"
         )
 
     # Map columns to PTP Monitoring template [2]
@@ -285,7 +284,8 @@ def extract_ptp_rows(prod_bytes: io.BytesIO) -> pd.DataFrame:
 def populate_ptp(template_file, ptp_df: pd.DataFrame) -> io.BytesIO:
     """
     Appends PTP rows to the bottom of 'PTP List' sheet [2].
-    Finds header row in PTP sheet dynamically.
+    Copies row format from the row above (fixes formatting mismatch).
+    Finds header row dynamically.
     Pastes data by matching column positions to header names.
     Returns modified workbook as BytesIO.
     """
@@ -308,7 +308,7 @@ def populate_ptp(template_file, ptp_df: pd.DataFrame) -> io.BytesIO:
         row_vals = [str(v).strip() if v is not None else "" for v in row]
         if "Date" in row_vals and "Name" in row_vals and "LAN" in row_vals:
             header_idx = idx
-            logger.info(f"PTP header row at index {idx} (row {idx+1})")
+            logger.info(f"PTP header row at index {idx} (row {idx + 1})")
             break
 
     header_row  = header_idx + 1  # 1-based
@@ -340,16 +340,64 @@ def populate_ptp(template_file, ptp_df: pd.DataFrame) -> io.BytesIO:
     }
     logger.info(f"PTP col index map: {col_index_map}")
 
-    # Paste PTP rows
+    # Get max column count for format copying
+    max_col = max(col_index_map.values()) if col_index_map else ws.max_column
+
+    def copy_row_format(source_row: int, target_row: int):
+        """
+        Copies cell format from source_row to target_row.
+        Copies: number_format, font, fill, border, alignment, row height.
+        This fixes the formatting mismatch between existing and new rows [2].
+        """
+        for col_idx in range(1, max_col + 1):
+            src = ws.cell(row=source_row, column=col_idx)
+            tgt = ws.cell(row=target_row, column=col_idx)
+            tgt.number_format = src.number_format
+            if src.font:
+                tgt.font      = copy.copy(src.font)
+            if src.fill:
+                tgt.fill      = copy.copy(src.fill)
+            if src.border:
+                tgt.border    = copy.copy(src.border)
+            if src.alignment:
+                tgt.alignment = copy.copy(src.alignment)
+        if ws.row_dimensions[source_row].height:
+            ws.row_dimensions[target_row].height = (
+                ws.row_dimensions[source_row].height
+            )
+
+    # Paste PTP rows with format copied from row above [2]
     logger.info(f"Pasting {len(ptp_df)} PTP rows at row {next_row}...")
-    for r_idx, row_data in enumerate(
-        ptp_df.itertuples(index=False), start=next_row
-    ):
+    actual_row = next_row
+    for row_data in ptp_df.itertuples(index=False):
+        # Skip completely empty rows
+        values = [
+            str(v).strip() if v is not None else ""
+            for v in row_data
+        ]
+        if not any(v != "" for v in values):
+            logger.warning(f"Skipping blank row at {actual_row}")
+            continue
+
+        # Copy format from the row directly above
+        # This ensures new rows match existing formatting [2]
+        source_format_row = actual_row - 1
+        if source_format_row >= header_row + 1:
+            copy_row_format(source_format_row, actual_row)
+
+        # Paste values by column name matching
         row_dict = dict(zip(ptp_df.columns, row_data))
         for col_name, value in row_dict.items():
             if col_name in col_index_map:
                 c_idx = col_index_map[col_name]
-                ws.cell(row=r_idx, column=c_idx).value = value
+                ws.cell(row=actual_row, column=c_idx).value = value
+
+        actual_row += 1
+
+    logger.info(
+        f"Total PTP rows pasted: {actual_row - next_row} "
+        f"(rows {next_row} to {actual_row - 1})"
+    )
 
     output = io.BytesIO()
     wb.save(output)
