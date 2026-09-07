@@ -22,6 +22,66 @@ PROD_PREFIX  = "SPM Productivity & Penetration Report_BSL-early&remedial"
 PTP_PREFIX   = "SPM PTP Monitoring Report_BSL-early"
 IS_WINDOWS   = platform.system() == "Windows"
 
+# Bulk-upload slots + filename patterns (case-insensitive substring).
+# Each slot's variants share one common prefix, so matching is
+# order-independent.
+UPLOAD_SLOTS = ("drr", "dialer", "prod_template", "ptp_template")
+SLOT_LABELS = {
+    "drr":           "📋 Daily Remark Report",
+    "dialer":        "📊 Dialer Report (Optional)",
+    "prod_template": "📄 Productivity Template",
+    "ptp_template":  "📄 PTP Monitoring Template",
+}
+SLOT_PATTERNS = {
+    # Daily_Remark_Report BSL... / Daily_Remark_Report...
+    "drr":           ["daily_remark_report"],
+    # DIALER REPORT BUSINESS LOAN SL ...
+    "dialer":        ["dialer report"],
+    # SPM Productivity & Penetration Report_BSL-early&remedial_... /
+    # SPM Productivity & Penetration Report...
+    "prod_template": ["spm productivity & penetration report"],
+    # SPM PTP Monitoring Report_BSL-early_... /
+    # SPM PTP Monitoring Report...
+    "ptp_template":  ["spm ptp monitoring report"],
+}
+
+
+def classify_upload(filename: str):
+    """
+    Classifies an uploaded filename into one of UPLOAD_SLOTS.
+    Case-insensitive substring match. Returns the slot key or None
+    when the file is not recognized.
+    """
+    name = (filename or "").upper()
+    for slot in UPLOAD_SLOTS:
+        for pattern in SLOT_PATTERNS[slot]:
+            if pattern.upper() in name:
+                return slot
+    return None
+
+
+def classify_uploads(files):
+    """
+    Sorts uploaded files into slots. First file per slot wins;
+    extras and unrecognized files are reported (not silently dropped).
+    Returns (slots_dict, warnings) where slots_dict maps each slot to
+    its file (or None) and warnings is a list of message strings.
+    """
+    slots = {slot: None for slot in UPLOAD_SLOTS}
+    warnings = []
+    for f in files or []:
+        slot = classify_upload(getattr(f, "name", ""))
+        if slot is None:
+            warnings.append(f"⚠️ Unrecognized file ignored: {f.name}")
+        elif slots[slot] is None:
+            slots[slot] = f
+        else:
+            warnings.append(
+                f"⚠️ Duplicate {SLOT_LABELS[slot]} ignored: {f.name} "
+                f"(using {slots[slot].name})."
+            )
+    return slots, warnings
+
 
 def _init_session_state():
     """Initialize all session state variables."""
@@ -53,39 +113,41 @@ def launch_app():
     st.markdown("---")
 
     # ------------------------------------------------------------------ #
-    # FILE UPLOADS
+    # FILE UPLOADS — all files at once, auto-classified by filename
     # ------------------------------------------------------------------ #
     st.subheader("📁 Upload Input Files")
 
-    col1, col2 = st.columns(2)
-    with col1:
-        dialer_file = st.file_uploader(
-            "📊 Dialer Report (Optional)",
-            type=["xlsx"],
-            help="Optional: DIALER REPORT BUSINESS LOAN SL *.xlsx. "
-                 "Skip if unavailable — 'Penetration Per Day' sheet "
-                 "will be left as-is.",
-            key="uploader_dialer"
-        )
-        drr_file = st.file_uploader(
-            "📋 Daily Remark Report",
-            type=["xlsx"],
-            help="Daily_Remark_Report*.xlsx",
-            key="uploader_drr"
-        )
-    with col2:
-        prod_template = st.file_uploader(
-            "📄 Productivity Template",
-            type=["xlsx"],
-            help="SPM Productivity & Penetration Report_BSL-early&remedial_*.xlsx",
-            key="uploader_prod"
-        )
-        ptp_template = st.file_uploader(
-            "📄 PTP Monitoring Template",
-            type=["xlsx"],
-            help="SPM PTP Monitoring Report_BSL-early_*.xlsx",
-            key="uploader_ptp"
-        )
+    uploaded_files = st.file_uploader(
+        "📁 Select all input files at once",
+        type=["xlsx"],
+        accept_multiple_files=True,
+        help="Select all files together — they are classified automatically: "
+             "Daily_Remark_Report* → Daily Remark Report, "
+             "DIALER REPORT* → Dialer (optional), "
+             "SPM Productivity & Penetration Report* → Productivity Template, "
+             "SPM PTP Monitoring Report* → PTP Monitoring Template.",
+        key="uploader_all",
+    )
+
+    slots, upload_warnings = classify_uploads(uploaded_files)
+    dialer_file   = slots["dialer"]
+    drr_file      = slots["drr"]
+    prod_template = slots["prod_template"]
+    ptp_template  = slots["ptp_template"]
+
+    # Classification summary: one row per slot
+    for slot in UPLOAD_SLOTS:
+        f = slots[slot]
+        if f is not None:
+            st.success(f"✅ {SLOT_LABELS[slot]}: {f.name}")
+        else:
+            msg = f"⬜ {SLOT_LABELS[slot]}: not uploaded"
+            if slot == "dialer":
+                st.info(msg + " (optional — Penetration sheet stays as-is).")
+            else:
+                st.info(msg)
+    for w in upload_warnings:
+        st.warning(w)
 
     st.markdown("---")
 
