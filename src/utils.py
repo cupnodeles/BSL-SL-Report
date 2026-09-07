@@ -149,3 +149,48 @@ def clean_date_value(value):
         if re.match(r"^\d{1,2}:\d{2}", tail.strip()):
             return head.strip()
     return s
+
+
+# Display format for date cells written by the automation
+# (m/d/yyyy shows 9/1/2026 style; Excel pads to 01/09/2026 with mm/dd/yyyy).
+EXCEL_DATE_FMT = "m/d/yyyy"
+
+
+def parse_date_value(value):
+    """
+    Parses a DATE-column value into a datetime.date for Excel output.
+    Real Excel dates (not text) are required for pivot tables to
+    recognize/group dates.
+
+    - datetime -> date part; date -> as-is.
+    - "2026-01-15", "01/15/2026", "2026-01-15 00:00:00" -> date.
+    - Blank/NaN/unparseable -> None.
+    """
+    if value is None:
+        return None
+    try:
+        import pandas as pd  # local import to avoid hard dep at import time
+        if value is pd.NaT or (isinstance(value, float) and pd.isna(value)):
+            return None
+    except Exception:
+        pass
+    if isinstance(value, datetime):
+        return value.date()
+    if isinstance(value, date):
+        return value
+    s = str(value).strip()
+    if s in ("", "nan", "None", "NaT", "NaN", "nat"):
+        return None
+    try:
+        import pandas as pd
+        parsed = pd.to_datetime(s, errors="coerce")
+        if parsed is None or pd.isna(parsed):
+            return None
+    except Exception:
+        return None
+    if isinstance(parsed, datetime):
+        return parsed.date()
+    try:
+        return parsed.date()
+    except Exception:
+        return None

@@ -13,7 +13,7 @@ from openpyxl.worksheet.table import Table, TableStyleInfo
 from openpyxl.utils import get_column_letter
 from typing import Optional
 from datetime import datetime, date
-from src.utils import strip_midnight_time
+from src.utils import strip_midnight_time, parse_date_value, EXCEL_DATE_FMT
 import logging
 
 logger = logging.getLogger("BSL_SL")
@@ -271,12 +271,38 @@ def _clear_below_header(ws, header_row: int):
             cell.value = None
 
 
-def _paste_below_header(ws, df: pd.DataFrame, header_row: int) -> int:
+def _write_cell(ws, row: int, col: int, value, is_date_col: bool = False):
+    """
+    Writes one value to ws.cell(row, col).
+    Date columns are written as REAL Excel dates (m/d/yyyy) so pivot
+    tables recognize them — never as text.
+    """
+    cell = ws.cell(row=row, column=col)
+    if is_date_col:
+        d = parse_date_value(value)
+        if d is not None:
+            cell.value = d
+            cell.number_format = EXCEL_DATE_FMT
+        else:
+            cell.value = ""
+        return
+    cleaned = strip_midnight_time(value)
+    if isinstance(cleaned, datetime):
+        # Non-midnight datetime (e.g. Time col) — keep as-is
+        cell.value = cleaned
+    else:
+        cell.value = cleaned
+
+
+def _paste_below_header(
+    ws, df: pd.DataFrame, header_row: int, date_cols=frozenset()
+) -> int:
     """
     Pastes DataFrame starting at header_row + 1, column A.
     Pure positional paste (A B C D...).
     Skips completely empty rows.
-    Strips midnight "00:00:00" from date values before writing.
+    Columns in date_cols are written as real Excel dates (no "00:00:00",
+    pivot-friendly).
     Returns the actual last row written.
     """
     start_row  = header_row + 1
@@ -285,6 +311,7 @@ def _paste_below_header(ws, df: pd.DataFrame, header_row: int) -> int:
         f"Pasting {len(df)} rows into '{ws.title}' "
         f"at row {start_row}"
     )
+    col_names = list(df.columns)
     for row_data in df.itertuples(index=False):
         values = [
             str(v).strip() if v is not None else ""
@@ -293,17 +320,11 @@ def _paste_below_header(ws, df: pd.DataFrame, header_row: int) -> int:
         if not any(v != "" for v in values):
             continue
         for c_idx, value in enumerate(row_data, start=1):
-            cleaned = strip_midnight_time(value)
-            if isinstance(cleaned, (datetime, date)) and not isinstance(
-                cleaned, datetime
-            ):
-                # date object (no time) — Excel shows date only
-                ws.cell(row=actual_row, column=c_idx).value = cleaned
-            elif isinstance(cleaned, datetime):
-                # Non-midnight datetime (e.g. Time col) — keep as-is
-                ws.cell(row=actual_row, column=c_idx).value = cleaned
-            else:
-                ws.cell(row=actual_row, column=c_idx).value = cleaned
+            col_name = col_names[c_idx - 1] if c_idx - 1 < len(col_names) else ""
+            _write_cell(
+                ws, actual_row, c_idx, value,
+                is_date_col=(col_name in date_cols),
+            )
         actual_row += 1
 
     last_written = actual_row - 1
@@ -366,8 +387,10 @@ def populate_productivity(
             _copy_row_format(ws_pen, pen_last_row, pen_next_row)
 
         for c_idx, value in enumerate(dialer_df.iloc[0].values, start=1):
-            ws_pen.cell(row=pen_next_row, column=c_idx).value = (
-                strip_midnight_time(value)
+            # Column 1 is DATE — real Excel date so pivots recognize it.
+            _write_cell(
+                ws_pen, pen_next_row, c_idx, value,
+                is_date_col=(c_idx == 1),
             )
 
         _recreate_table(
@@ -399,7 +422,10 @@ def populate_productivity(
         logger.warning("Remedial header not found. Using row 1.")
 
     _clear_below_header(ws_rem, rem_header_row)
-    rem_last = _paste_below_header(ws_rem, remedial_df, rem_header_row)
+    rem_last = _paste_below_header(
+        ws_rem, remedial_df, rem_header_row,
+        date_cols={"Date", "PTP Date", "Payment Date"},
+    )
     _recreate_table(
         ws_rem, rem_table_info,
         rem_header_row,
@@ -430,7 +456,10 @@ def populate_productivity(
         logger.warning("Early SL header not found. Using row 1.")
 
     _clear_below_header(ws_early, early_header_row)
-    early_last = _paste_below_header(ws_early, early_df, early_header_row)
+    early_last = _paste_below_header(
+        ws_early, early_df, early_header_row,
+        date_cols={"Date", "PTP Date", "Payment Date"},
+    )
     _recreate_table(
         ws_early, early_table_info,
         early_header_row,

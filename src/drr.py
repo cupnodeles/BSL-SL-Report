@@ -7,7 +7,7 @@ import numpy as np
 import logging
 import re
 from datetime import datetime, date, time
-from src.utils import clean_date_value
+from src.utils import parse_date_value
 
 logger = logging.getLogger("BSL_SL")
 
@@ -73,14 +73,12 @@ def _safe_str(series: pd.Series) -> pd.Series:
 
 def _safe_date_str(series: pd.Series) -> pd.Series:
     """
-    Converts a DATE Series to date-only strings (no "00:00:00").
-    datetime -> date part only; "YYYY-MM-DD HH:MM:SS" -> date part.
+    Converts a DATE Series to real datetime.date values (not text) so
+    Excel pivot tables recognize them as dates. Blank -> "".
     """
     def _one(v):
-        c = clean_date_value(v)
-        if isinstance(c, (datetime, date)):
-            return c.isoformat()
-        return c
+        d = parse_date_value(v)
+        return d if d is not None else ""
     return series.apply(_one)
 
 

@@ -12,7 +12,10 @@ import openpyxl
 import logging
 from datetime import datetime, date, timedelta
 from openpyxl.utils import get_column_letter, range_boundaries
-from src.utils import get_last_row, clean_date_value, strip_midnight_time
+from src.utils import (
+    get_last_row, clean_date_value, strip_midnight_time,
+    parse_date_value, EXCEL_DATE_FMT,
+)
 
 logger = logging.getLogger("BPI_BL_SL")
 
@@ -389,7 +392,11 @@ def _fill_holding_date(ws, col_index_map: dict,
     filled = 0
     for r in range(first_row, last_row + 1):
         ptp_val = ws.cell(row=r, column=ptp_date_col).value
-        ws.cell(row=r, column=holding_col).value = _holding_date_value(ptp_val)
+        val = _holding_date_value(ptp_val)
+        cell = ws.cell(row=r, column=holding_col)
+        cell.value = val
+        if isinstance(val, date):
+            cell.number_format = EXCEL_DATE_FMT
         filled += 1
     logger.info(
         f"Holding Date values filled for {filled} row(s) "
@@ -547,17 +554,26 @@ def populate_ptp(template_file, ptp_df: pd.DataFrame) -> io.BytesIO:
         if source_format_row >= header_row + 1:
             copy_row_format(source_format_row, actual_row)
 
-        # Paste values by column name matching
-        # (date values stripped of midnight "00:00:00")
+        # Paste values by column name matching.
+        # Date columns -> REAL Excel dates (pivot-friendly, m/d/yyyy).
         row_dict = dict(zip(ptp_df.columns, row_data))
         for col_name, value in row_dict.items():
             if col_name in col_index_map:
                 c_idx = col_index_map[col_name]
-                cleaned = strip_midnight_time(value)
-                if isinstance(cleaned, datetime):
-                    ws.cell(row=actual_row, column=c_idx).value = cleaned
+                cell = ws.cell(row=actual_row, column=c_idx)
+                if col_name in PTP_DATE_COLS:
+                    d = parse_date_value(value)
+                    if d is not None:
+                        cell.value = d
+                        cell.number_format = EXCEL_DATE_FMT
+                    else:
+                        cell.value = ""
                 else:
-                    ws.cell(row=actual_row, column=c_idx).value = cleaned
+                    cleaned = strip_midnight_time(value)
+                    if isinstance(cleaned, datetime):
+                        cell.value = cleaned
+                    else:
+                        cell.value = cleaned
 
         actual_row += 1
 
