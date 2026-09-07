@@ -11,6 +11,9 @@ import pandas as pd
 import openpyxl
 from openpyxl.worksheet.table import Table, TableStyleInfo
 from openpyxl.utils import get_column_letter
+from typing import Optional
+from datetime import datetime, date
+from src.utils import strip_midnight_time
 import logging
 
 logger = logging.getLogger("BSL_SL")
@@ -273,6 +276,7 @@ def _paste_below_header(ws, df: pd.DataFrame, header_row: int) -> int:
     Pastes DataFrame starting at header_row + 1, column A.
     Pure positional paste (A B C D...).
     Skips completely empty rows.
+    Strips midnight "00:00:00" from date values before writing.
     Returns the actual last row written.
     """
     start_row  = header_row + 1
@@ -289,7 +293,17 @@ def _paste_below_header(ws, df: pd.DataFrame, header_row: int) -> int:
         if not any(v != "" for v in values):
             continue
         for c_idx, value in enumerate(row_data, start=1):
-            ws.cell(row=actual_row, column=c_idx).value = value
+            cleaned = strip_midnight_time(value)
+            if isinstance(cleaned, (datetime, date)) and not isinstance(
+                cleaned, datetime
+            ):
+                # date object (no time) — Excel shows date only
+                ws.cell(row=actual_row, column=c_idx).value = cleaned
+            elif isinstance(cleaned, datetime):
+                # Non-midnight datetime (e.g. Time col) — keep as-is
+                ws.cell(row=actual_row, column=c_idx).value = cleaned
+            else:
+                ws.cell(row=actual_row, column=c_idx).value = cleaned
         actual_row += 1
 
     last_written = actual_row - 1
@@ -302,13 +316,14 @@ def _paste_below_header(ws, df: pd.DataFrame, header_row: int) -> int:
 
 def populate_productivity(
     template_file,
-    dialer_df: pd.DataFrame,
+    dialer_df: Optional[pd.DataFrame],
     early_df: pd.DataFrame,
     remedial_df: pd.DataFrame
 ) -> io.BytesIO:
     """
     Populates the Productivity Template [4][5]:
     1. Penetration Per Day  — remove table → append → re-create
+       (SKIPPED when dialer_df is None/empty — sheet left untouched)
     2. Stat Result Remedial — remove table → clear → paste → re-create
     3. Stat Result Early SL — remove table → clear → paste → re-create
     """
@@ -317,42 +332,50 @@ def populate_productivity(
     logger.info(f"Sheets found: {wb.sheetnames}")
 
     # ------------------------------------------------------------------ #
-    # STEP 1: Penetration Per Day
+    # STEP 1: Penetration Per Day (OPTIONAL — skipped without dialer)
     # ------------------------------------------------------------------ #
-    pen_sheet      = _find_sheet_exact(wb, [
-        "Penetration Per Day", "Penetration", "Per Day"
-    ])
-    ws_pen         = wb[pen_sheet]
-    pen_table_info = _remove_tables(ws_pen)
-
-    try:
-        pen_header_row = _find_header_row_strict(
-            ws_pen, PENETRATION_HEADER_KEYS
+    if dialer_df is None or len(dialer_df) == 0:
+        logger.warning(
+            "No Dialer data provided — skipping 'Penetration Per Day'. "
+            "Sheet left as-is from template."
         )
-    except ValueError:
+    else:
+        pen_sheet      = _find_sheet_exact(wb, [
+            "Penetration Per Day", "Penetration", "Per Day"
+        ])
+        ws_pen         = wb[pen_sheet]
+        pen_table_info = _remove_tables(ws_pen)
+
         try:
             pen_header_row = _find_header_row_strict(
-                ws_pen, ["Date", "Client", "Accounts"]
+                ws_pen, PENETRATION_HEADER_KEYS
             )
         except ValueError:
-            pen_header_row = 1
-            logger.warning("Penetration header not found. Using row 1.")
+            try:
+                pen_header_row = _find_header_row_strict(
+                    ws_pen, ["Date", "Client", "Accounts"]
+                )
+            except ValueError:
+                pen_header_row = 1
+                logger.warning("Penetration header not found. Using row 1.")
 
-    pen_last_row = _find_last_data_row_strict(ws_pen, pen_header_row)
-    pen_next_row = pen_last_row + 1
+        pen_last_row = _find_last_data_row_strict(ws_pen, pen_header_row)
+        pen_next_row = pen_last_row + 1
 
-    if pen_last_row > pen_header_row:
-        _copy_row_format(ws_pen, pen_last_row, pen_next_row)
+        if pen_last_row > pen_header_row:
+            _copy_row_format(ws_pen, pen_last_row, pen_next_row)
 
-    for c_idx, value in enumerate(dialer_df.iloc[0].values, start=1):
-        ws_pen.cell(row=pen_next_row, column=c_idx).value = value
+        for c_idx, value in enumerate(dialer_df.iloc[0].values, start=1):
+            ws_pen.cell(row=pen_next_row, column=c_idx).value = (
+                strip_midnight_time(value)
+            )
 
-    _recreate_table(
-        ws_pen, pen_table_info,
-        pen_header_row, pen_next_row,
-        len(dialer_df.columns)
-    )
-    logger.info(f"Dialer appended at row {pen_next_row}.")
+        _recreate_table(
+            ws_pen, pen_table_info,
+            pen_header_row, pen_next_row,
+            len(dialer_df.columns)
+        )
+        logger.info(f"Dialer appended at row {pen_next_row}.")
 
     # ------------------------------------------------------------------ #
     # STEP 2: Stat Result - BL Remedial SL

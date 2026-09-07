@@ -6,6 +6,7 @@
 
 import pandas as pd
 import logging
+from src.utils import clean_date_value
 
 logger = logging.getLogger("BSL_SL")
 
@@ -55,6 +56,10 @@ def extract_dialer_data(file) -> pd.DataFrame:
         raise ValueError(f"Missing columns in Dialer Report: {missing}")
 
     df = df[DIALER_COLUMNS].dropna(how="all")
+
+    # Strip time from DATE so Penetration never shows "00:00:00"
+    if "DATE" in df.columns:
+        df["DATE"] = df["DATE"].apply(clean_date_value)
 
     logger.info(f"Dialer Report extracted: {len(df)} row(s) found.")
     return df

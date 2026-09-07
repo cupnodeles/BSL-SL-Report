@@ -59,9 +59,11 @@ def launch_app():
     col1, col2 = st.columns(2)
     with col1:
         dialer_file = st.file_uploader(
-            "📊 Dialer Report",
+            "📊 Dialer Report (Optional)",
             type=["xlsx"],
-            help="DIALER REPORT BUSINESS LOAN SL *.xlsx",
+            help="Optional: DIALER REPORT BUSINESS LOAN SL *.xlsx. "
+                 "Skip if unavailable — 'Penetration Per Day' sheet "
+                 "will be left as-is.",
             key="uploader_dialer"
         )
         drr_file = st.file_uploader(
@@ -125,16 +127,22 @@ def launch_app():
     st.markdown("---")
 
     # ------------------------------------------------------------------ #
-    # RUN BUTTON
+    # RUN BUTTON — Dialer is OPTIONAL, other 3 files are required
     # ------------------------------------------------------------------ #
-    all_uploaded = all([dialer_file, drr_file, prod_template, ptp_template])
+    required_uploaded = all([drr_file, prod_template, ptp_template])
 
-    if not all_uploaded:
-        st.info("👆 Please upload all 4 files to proceed.")
+    if not required_uploaded:
+        st.info("👆 Please upload Daily Remark Report + both templates to proceed.")
+
+    if dialer_file is None and required_uploaded:
+        st.warning(
+            "⚠️ No Dialer Report uploaded — 'Penetration Per Day' "
+            "will be left as-is. PTP extraction only uses Early/Remedial data."
+        )
 
     if st.button(
         "▶ RUN AUTOMATION",
-        disabled=not all_uploaded,
+        disabled=not required_uploaded,
         type="primary",
         key="btn_run"
     ):
@@ -217,15 +225,27 @@ def run_automation(
 
     try:
         # ---------------------------------------------------------- #
-        # STEP 1: Extract Dialer Data [1]
+        # STEP 1: Extract Dialer Data [1] — OPTIONAL
+        # PTP flow does not use dialer; only Penetration sheet does.
         # ---------------------------------------------------------- #
-        status.info("📊 Step 1/6: Extracting Dialer Report data...")
-        dialer_bytes = io.BytesIO(dialer_file.read())
-        if is_encrypted(dialer_bytes):
-            logger.info("Dialer file encrypted. Decrypting...")
-            dialer_bytes = decrypt_file(dialer_bytes)
-        dialer_df = extract_dialer_data(dialer_bytes)
-        logger.info(f"Dialer rows extracted: {len(dialer_df)}")
+        if dialer_file is not None:
+            status.info("📊 Step 1/6: Extracting Dialer Report data...")
+            dialer_bytes = io.BytesIO(dialer_file.read())
+            if is_encrypted(dialer_bytes):
+                logger.info("Dialer file encrypted. Decrypting...")
+                dialer_bytes = decrypt_file(dialer_bytes)
+            dialer_df = extract_dialer_data(dialer_bytes)
+            logger.info(f"Dialer rows extracted: {len(dialer_df)}")
+        else:
+            status.info(
+                "⏭️ Step 1/6: No Dialer Report — "
+                "skipping Penetration update..."
+            )
+            logger.warning(
+                "Dialer file not provided — "
+                "'Penetration Per Day' will be left untouched."
+            )
+            dialer_df = None
         progress.progress(15)
 
         # ---------------------------------------------------------- #

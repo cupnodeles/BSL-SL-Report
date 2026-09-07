@@ -5,6 +5,9 @@
 import pandas as pd
 import numpy as np
 import logging
+import re
+from datetime import datetime, date, time
+from src.utils import clean_date_value
 
 logger = logging.getLogger("BSL_SL")
 
@@ -43,18 +46,67 @@ COLUMN_MAP = {
 EARLY_EXTRA = {"Cycle": "Bucket"}
 
 
+# DRR source columns that are DATES (time component must be dropped
+# so outputs never show "00:00:00").
+DATE_SRC_COLS = {"Date", "PTP Date", "Claim Paid Date"}
+
+
 def _safe_str(series: pd.Series) -> pd.Series:
     """
     Converts a Series to string safely.
     Replaces NaN, None, 'nan', 'None', 'NaT' with empty string.
+    Strips any trailing midnight "00:00:00" time.
     """
-    return (
+    out = (
         series
         .fillna("")
         .astype(str)
         .replace({"nan": "", "None": "", "NaT": "", "NaN": ""})
         .str.strip()
     )
+    # "2026-01-15 00:00:00" -> "2026-01-15" (date cols may still
+    # carry a time part when read as text).
+    return out.str.replace(
+        r"\s+00:00:00(?:\.0+)?$", "", regex=True
+    ).str.strip()
+
+
+def _safe_date_str(series: pd.Series) -> pd.Series:
+    """
+    Converts a DATE Series to date-only strings (no "00:00:00").
+    datetime -> date part only; "YYYY-MM-DD HH:MM:SS" -> date part.
+    """
+    def _one(v):
+        c = clean_date_value(v)
+        if isinstance(c, (datetime, date)):
+            return c.isoformat()
+        return c
+    return series.apply(_one)
+
+
+def _safe_time_str(series: pd.Series) -> pd.Series:
+    """
+    Converts a TIME Series to time-only strings.
+    datetime -> "HH:MM:SS"; "1899-12-30 10:00:00" -> "10:00:00".
+    """
+    def _one(v):
+        if isinstance(v, datetime):
+            return v.strftime("%H:%M:%S")
+        if isinstance(v, time):
+            return v.strftime("%H:%M:%S")
+        s = "" if v is None else str(v).strip()
+        if s in ("", "nan", "None", "NaT", "NaN"):
+            return ""
+        m = re.match(r"^\d{4}-\d{2}-\d{2}[T ](\d{2}:\d{2}(?::\d{2})?)", s)
+        if m:
+            t = m.group(1)
+            return t if len(t) == 8 else f"{t}:00"
+        m2 = re.match(r"^\d{1,2}/\d{1,2}/\d{4}\s+(\d{2}:\d{2}(?::\d{2})?)", s)
+        if m2:
+            t = m2.group(1)
+            return t if len(t) == 8 else f"{t}:00"
+        return s
+    return series.apply(_one)
 
 
 def clean_drr(file) -> pd.DataFrame:
@@ -150,7 +202,12 @@ def map_remedial(df: pd.DataFrame) -> pd.DataFrame:
     mapped = pd.DataFrame()
     for drr_col, tmpl_col in COLUMN_MAP.items():
         if drr_col in df.columns:
-            mapped[tmpl_col] = _safe_str(df[drr_col]).values
+            if drr_col in DATE_SRC_COLS:
+                mapped[tmpl_col] = _safe_date_str(df[drr_col]).values
+            elif drr_col == "Time":
+                mapped[tmpl_col] = _safe_time_str(df[drr_col]).values
+            else:
+                mapped[tmpl_col] = _safe_str(df[drr_col]).values
         else:
             logger.warning(
                 f"Column '{drr_col}' not found in DRR. Filling with empty."

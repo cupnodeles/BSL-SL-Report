@@ -6,14 +6,25 @@
 
 import io
 import copy
+import re
 import pandas as pd
 import openpyxl
 import logging
-from src.utils import get_last_row
+from datetime import datetime, date, timedelta
+from openpyxl.utils import get_column_letter, range_boundaries
+from src.utils import get_last_row, clean_date_value, strip_midnight_time
 
 logger = logging.getLogger("BPI_BL_SL")
 
 PTP_STATUS_PREFIX = "PTP"
+
+# Extra computed column in the PTP Monitoring template.
+# Filled with VALUES (not formulas): WORKDAY(PTP Date, 2).
+HOLDING_DATE_COL = "Holding Date"
+HOLDING_WORKDAYS = 2
+
+# Date columns in the PTP flow — time component is always dropped.
+PTP_DATE_COLS = {"Date", "PTP Date"}
 
 # Column mapping: Stat Result -> PTP Monitoring [2]
 PTP_COLUMN_MAP = {
@@ -123,6 +134,34 @@ def _sheet_to_df_positional(ws) -> pd.DataFrame:
     df = df.fillna("").astype(str)
     for col in df.columns:
         df[col] = df[col].str.strip()
+
+    # Strip midnight "00:00:00" from date columns so PTP output
+    # never carries a bogus time component.
+    def _clean_cell(s):
+        c = clean_date_value(s)
+        if isinstance(c, (datetime, date)):
+            return c.isoformat()
+        return c
+
+    def _clean_time_cell(s):
+        if not isinstance(s, str):
+            s = "" if s is None else str(s)
+        s = s.strip()
+        m = re.match(r"^\d{4}-\d{2}-\d{2}[T ](\d{2}:\d{2}(?::\d{2})?)", s)
+        if m:
+            t = m.group(1)
+            return t if len(t) == 8 else f"{t}:00"
+        m2 = re.match(r"^\d{1,2}/\d{1,2}/\d{4}\s+(\d{2}:\d{2}(?::\d{2})?)", s)
+        if m2:
+            t = m2.group(1)
+            return t if len(t) == 8 else f"{t}:00"
+        return s
+
+    for col in df.columns:
+        if col in PTP_DATE_COLS:
+            df[col] = df[col].apply(_clean_cell)
+        elif col == "Time":
+            df[col] = df[col].apply(_clean_time_cell)
 
     # Remove completely empty rows
     df = df[
@@ -276,9 +315,129 @@ def extract_ptp_rows(prod_bytes: io.BytesIO) -> pd.DataFrame:
             logger.warning(f"'{src_col}' not found — filling empty.")
             mapped[dst_col] = ""
 
+    # Final safety: ensure date cols carry no time component.
+    def _final_date(s):
+        c = clean_date_value(s)
+        if isinstance(c, (datetime, date)):
+            return c.isoformat()
+        return c
+
+    for _col in PTP_DATE_COLS:
+        if _col in mapped.columns:
+            mapped[_col] = mapped[_col].apply(_final_date)
+
     logger.info(f"Mapped PTP cols: {list(mapped.columns)}")
     logger.info(f"Mapped PTP rows: {len(mapped)}")
     return mapped.reset_index(drop=True)
+
+
+def _add_workdays(start: date, n: int) -> date:
+    """Adds n workdays (Mon–Fri) to start. Mirrors Excel WORKDAY(d, n)."""
+    d = start
+    while n > 0:
+        d += timedelta(days=1)
+        if d.weekday() < 5:
+            n -= 1
+    return d
+
+
+def _holding_date_value(ptp_date_value):
+    """
+    Computes WORKDAY(PTP Date, 2) in Python so 'Holding Date' is
+    pasted as a VALUE (real Excel date), not a formula.
+    Blank/unparseable PTP Date -> "" (cell left blank).
+    """
+    if ptp_date_value is None:
+        return ""
+    if isinstance(ptp_date_value, datetime):
+        base = ptp_date_value.date()
+    elif isinstance(ptp_date_value, date):
+        base = ptp_date_value
+    else:
+        s = str(ptp_date_value).strip()
+        if s in ("", "nan", "None", "NaT", "NaN", "nat"):
+            return ""
+        try:
+            parsed = pd.to_datetime(s, errors="coerce")
+        except Exception:
+            return ""
+        if parsed is None or pd.isna(parsed):
+            return ""
+        base = parsed.date() if isinstance(parsed, datetime) else parsed
+        if not isinstance(base, date):
+            return ""
+    return _add_workdays(base, HOLDING_WORKDAYS)
+
+
+def _fill_holding_date(ws, col_index_map: dict,
+                       first_row: int, last_row: int):
+    """
+    Fills 'Holding Date' with VALUES (WORKDAY of each row's PTP Date
+    + 2 workdays) for rows first_row..last_row. Skipped silently when
+    the template has no 'Holding Date' column.
+    """
+    if last_row < first_row:
+        return
+    holding_col = col_index_map.get(HOLDING_DATE_COL)
+    if not holding_col:
+        logger.info("No 'Holding Date' column — skipping fill.")
+        return
+    ptp_date_col = col_index_map.get("PTP Date")
+    if not ptp_date_col:
+        logger.warning("No 'PTP Date' column — cannot compute Holding Date.")
+        return
+    filled = 0
+    for r in range(first_row, last_row + 1):
+        ptp_val = ws.cell(row=r, column=ptp_date_col).value
+        ws.cell(row=r, column=holding_col).value = _holding_date_value(ptp_val)
+        filled += 1
+    logger.info(
+        f"Holding Date values filled for {filled} row(s) "
+        f"(rows {first_row} to {last_row})."
+    )
+
+
+def _expand_tables(ws, header_row: int, new_last_row: int):
+    """
+    Expands every Excel Table on ws so its ref covers header_row..
+    new_last_row (keeps existing columns). Required so appended PTP
+    rows join the table — structured refs like [@[PTP Date]] and
+    filters/pivots keep working.
+    """
+    try:
+        tables = list(ws.tables.values())
+    except Exception as e:
+        logger.warning(f"Could not list tables: {e}")
+        return
+    if not tables:
+        logger.info("No Excel tables to expand.")
+        return
+    for tbl in tables:
+        if isinstance(tbl, str):
+            continue
+        try:
+            old_ref = tbl.ref
+            min_col, min_row, max_col, max_row = range_boundaries(old_ref)
+        except Exception as e:
+            logger.warning(f"Could not parse table ref: {e}")
+            continue
+        if new_last_row <= max_row and min_row == header_row:
+            continue
+        new_ref = (
+            f"{get_column_letter(min_col)}{min(header_row, min_row)}:"
+            f"{get_column_letter(max_col)}{max(new_last_row, max_row)}"
+        )
+        try:
+            tbl.ref = new_ref
+            if getattr(tbl, "autoFilter", None) is not None:
+                try:
+                    tbl.autoFilter.ref = new_ref
+                except Exception:
+                    pass
+            logger.info(f"Expanded table '{tbl.displayName}': "
+                        f"{old_ref} -> {new_ref}")
+        except Exception as e:
+            logger.warning(f"Could not expand table: {e}")
 
 
 def populate_ptp(template_file, ptp_df: pd.DataFrame) -> io.BytesIO:
@@ -287,6 +446,9 @@ def populate_ptp(template_file, ptp_df: pd.DataFrame) -> io.BytesIO:
     Copies row format from the row above (fixes formatting mismatch).
     Finds header row dynamically.
     Pastes data by matching column positions to header names.
+    Auto-fills 'Holding Date' with VALUES (WORKDAY of PTP Date + 2).
+    Expands Excel Table(s) to cover new rows.
+    Strips midnight "00:00:00" from date values.
     Returns modified workbook as BytesIO.
     """
     logger.info("Loading PTP Monitoring Template...")
@@ -386,11 +548,16 @@ def populate_ptp(template_file, ptp_df: pd.DataFrame) -> io.BytesIO:
             copy_row_format(source_format_row, actual_row)
 
         # Paste values by column name matching
+        # (date values stripped of midnight "00:00:00")
         row_dict = dict(zip(ptp_df.columns, row_data))
         for col_name, value in row_dict.items():
             if col_name in col_index_map:
                 c_idx = col_index_map[col_name]
-                ws.cell(row=actual_row, column=c_idx).value = value
+                cleaned = strip_midnight_time(value)
+                if isinstance(cleaned, datetime):
+                    ws.cell(row=actual_row, column=c_idx).value = cleaned
+                else:
+                    ws.cell(row=actual_row, column=c_idx).value = cleaned
 
         actual_row += 1
 
@@ -398,6 +565,20 @@ def populate_ptp(template_file, ptp_df: pd.DataFrame) -> io.BytesIO:
         f"Total PTP rows pasted: {actual_row - next_row} "
         f"(rows {next_row} to {actual_row - 1})"
     )
+
+    last_written = actual_row - 1
+
+    # ---------------------------------------------------------- #
+    # Holding Date: WORKDAY(PTP Date, 2) pasted as VALUES
+    # ---------------------------------------------------------- #
+    _fill_holding_date(ws, col_index_map, next_row, last_written)
+
+    # ---------------------------------------------------------- #
+    # Expand Excel Table(s) to include the new rows so filters
+    # and pivots keep working.
+    # ---------------------------------------------------------- #
+    if last_written >= next_row:
+        _expand_tables(ws, header_row, last_written)
 
     output = io.BytesIO()
     wb.save(output)

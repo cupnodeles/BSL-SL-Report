@@ -3,7 +3,8 @@
 
 import os
 import logging
-from datetime import datetime, timedelta
+import re
+from datetime import datetime, timedelta, date, time
 
 
 def get_last_row(sheet) -> int:
@@ -58,3 +59,93 @@ def setup_logger(log_dir: str = "logs") -> logging.Logger:
         ]
     )
     return logging.getLogger("BSL_SL")
+
+
+# ------------------------------------------------------------------ #
+# Date cleaning — strips bogus "00:00:00" midnight times from dates
+# ------------------------------------------------------------------ #
+_MIDNIGHT_SUFFIX_RE = re.compile(
+    r"^(?P<date>\d{4}-\d{2}-\d{2}|\d{1,2}/\d{1,2}/\d{4})"
+    r"\s+00:00:00(?:\.0+)?$"
+)
+_DATETIME_MIDNIGHT_RE = re.compile(
+    r"^(?P<date>.+?)\s+00:00:00(?:\.0+)?$"
+)
+
+
+def strip_midnight_time(value):
+    """
+    Removes '00:00:00' midnight time from date values.
+
+    - datetime/date       -> date (drops midnight time); datetimes with
+                             a real time component keep date part only
+                             when used for date columns via
+                             clean_date_value(); bare time(0,0) -> "".
+    - "YYYY-MM-DD 00:00:00" / "M/D/YYYY 00:00:00" -> date part only.
+    - Other strings       -> stripped, unchanged.
+    - None / NaN          -> "".
+    """
+    if value is None:
+        return ""
+    # pandas NaT / NaN
+    try:
+        import pandas as pd  # local import to avoid hard dep at import time
+        if value is pd.NaT or (isinstance(value, float) and pd.isna(value)):
+            return ""
+    except Exception:
+        pass
+    if isinstance(value, datetime):
+        if value.time() == time(0, 0, 0):
+            return value.date()
+        return value
+    if isinstance(value, date):
+        return value
+    if isinstance(value, time):
+        if value == time(0, 0, 0):
+            return ""
+        return value.strftime("%H:%M:%S")
+    s = str(value).strip()
+    if s in ("", "nan", "None", "NaT", "NaN", "nat"):
+        return ""
+    m = _MIDNIGHT_SUFFIX_RE.match(s)
+    if m:
+        return m.group("date")
+    m2 = _DATETIME_MIDNIGHT_RE.match(s)
+    if m2:
+        # Only strip when the trailing time is exactly midnight.
+        # e.g. "2026-01-15 00:00:00" -> "2026-01-15"
+        # e.g. "01/15/2026 00:00:00" -> "01/15/2026"
+        return m2.group("date").strip()
+    return s
+
+
+def clean_date_value(value):
+    """
+    Normalizes a DATE-column value (Date, PTP Date, Payment Date, DATE):
+    - Blank/NaN -> "".
+    - datetime with any time -> date part only (drops 00:00:00 AND real
+      times — date columns never keep times).
+    - "YYYY-MM-DD HH:MM:SS" / "M/D/YYYY HH:MM" strings -> date part only.
+    - Bare date strings -> stripped, unchanged.
+    """
+    if value is None:
+        return ""
+    try:
+        import pandas as pd
+        if value is pd.NaT or (isinstance(value, float) and pd.isna(value)):
+            return ""
+    except Exception:
+        pass
+    if isinstance(value, datetime):
+        return value.date()
+    if isinstance(value, date):
+        return value
+    s = str(value).strip()
+    if s in ("", "nan", "None", "NaT", "NaN", "nat"):
+        return ""
+    # "2026-01-15 14:30:00" -> "2026-01-15"; "01/15/2026 10:00" -> "01/15/2026"
+    if " " in s:
+        head, _, tail = s.partition(" ")
+        if re.match(r"^\d{1,2}:\d{2}", tail.strip()):
+            return head.strip()
+    return s
