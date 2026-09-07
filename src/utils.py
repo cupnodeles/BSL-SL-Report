@@ -158,6 +158,13 @@ EXCEL_DATE_FMT = "m/d/yyyy"
 # Display format for amount cells — real numbers, no green flag.
 EXCEL_AMOUNT_FMT = "#,##0.00"
 
+# Fallback display formats for the Penetration sheet, used only when the
+# history row gives no usable format. They mimic the existing history
+# style (yyyy-mm-dd dates, 0.00% percents, #,##0 balances).
+PEN_DATE_FMT = "yyyy-mm-dd"
+PEN_PCT_FMT = "0.00%"
+PEN_INT_FMT = "#,##0"
+
 
 def parse_date_value(value):
     """
@@ -245,3 +252,120 @@ def parse_amount_value(value):
         return -num if neg else num
     except Exception:
         return None
+
+
+def parse_percent_value(value):
+    """
+    Parses a PERCENT-column value into a fraction for Excel output
+    (0.0278 with a % format displays as 2.78%).
+
+    - Literal "9.22%" -> 0.0922 (divided by 100, standard semantics).
+    - Plain 9.2177 / "0.0278" -> kept as-is (dialer stores fractions).
+    - Blank/NaN/unparseable -> None (cell left blank, never crashes).
+    """
+    if value is None:
+        return None
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, (int, float)):
+        try:
+            import math
+            if isinstance(value, float) and (
+                math.isnan(value) or math.isinf(value)
+            ):
+                return None
+        except Exception:
+            pass
+        return float(value)
+    s = str(value).strip()
+    if s in ("", "nan", "None", "NaT", "NaN", "nat", "-", "--", "N/A", "n/a"):
+        return None
+    try:
+        has_pct = "%" in s
+        s = s.replace("%", "")
+        amt = parse_amount_value(s)
+        if amt is None:
+            return None
+        return amt / 100.0 if has_pct else amt
+    except Exception:
+        return None
+
+
+def _looks_like_date_text(s: str) -> bool:
+    """True for ISO '2026-09-01' / '2026-09-01 00:00:00' style strings."""
+    s = s.strip()
+    if re.match(r"^\d{4}-\d{1,2}-\d{1,2}(\s+\d{1,2}:\d{2}(:\d{2})?(\.0+)?)?$", s):
+        return True
+    if re.match(
+        r"^\d{1,2}/\d{1,2}/\d{4}(\s+\d{1,2}:\d{2}(:\d{2})?(\.0+)?)?$", s
+    ):
+        return True
+    return False
+
+
+def infer_cell_kind(cell) -> str:
+    """
+    Probes a history-row cell to decide how the new row's value in the
+    same column should be typed ("follow the format").
+
+    Returns one of: "percent" | "date" | "number" |
+    "percent-history" | "date-history" | "number-history" | "text".
+    - "percent"/"date"/"number": history cell is already typed — reuse
+      its number format as-is.
+    - "*-history": history cell is TEXT that looks like a percent, date
+      or grouped number — callers should write a typed value with an
+      explicit fallback format that looks identical (PEN_*_FMT).
+    - "text": durations, names and anything else — write text unchanged.
+    """
+    try:
+        v = cell.value
+    except Exception:
+        return "text"
+    if v is None or (isinstance(v, str) and v.strip() == ""):
+        return "text"
+    if isinstance(v, bool):
+        return "text"
+    if isinstance(v, datetime):
+        return "date"
+    if isinstance(v, date):
+        return "date"
+    if isinstance(v, (int, float)):
+        try:
+            fmt = str(getattr(cell, "number_format", "") or "")
+        except Exception:
+            fmt = ""
+        if "%" in fmt:
+            return "percent"
+        if _is_date_format(fmt):
+            return "date"
+        return "number"
+    if isinstance(v, str):
+        s = v.strip()
+        try:
+            fmt = str(getattr(cell, "number_format", "") or "")
+        except Exception:
+            fmt = ""
+        if "%" in fmt or (
+            s.endswith("%")
+            and parse_amount_value(s.replace("%", "")) is not None
+        ):
+            return "percent-history" if "%" not in fmt else "percent"
+        if _is_date_format(fmt) or _looks_like_date_text(s):
+            return "date" if _is_date_format(fmt) else "date-history"
+        if "," in s and parse_amount_value(s) is not None:
+            return "number-history"
+        return "text"
+    return "text"
+
+
+def _is_date_format(fmt: str) -> bool:
+    """Heuristic: does an Excel number-format string render dates?"""
+    f = (fmt or "").lower()
+    if not f or f in ("general", "@"):
+        return False
+    # Strip quoted literals and escaped chars, then look for date tokens.
+    f = re.sub(r'"[^"]*"', "", f)
+    f = f.replace("\\", "")
+    return any(tok in f for tok in (
+        "yyyy", "yy", "mmm", "mm", "dd", "d/m", "m/d",
+    ))

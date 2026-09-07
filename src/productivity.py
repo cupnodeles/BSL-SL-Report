@@ -15,7 +15,9 @@ from typing import Optional
 from datetime import datetime, date
 from src.utils import (
     strip_midnight_time, parse_date_value, parse_amount_value,
+    parse_percent_value, infer_cell_kind,
     EXCEL_DATE_FMT, EXCEL_AMOUNT_FMT,
+    PEN_DATE_FMT, PEN_PCT_FMT, PEN_INT_FMT,
 )
 import logging
 
@@ -310,6 +312,69 @@ def _write_cell(
         cell.value = cleaned
 
 
+def _write_penetration_cell(ws, row: int, col: int, value, probe_cell,
+                            prefer_date: bool = False):
+    """
+    Writes one dialer value to the Penetration sheet, following the
+    existing history row's format (see utils.infer_cell_kind):
+    - percent (+percent-history) -> fraction + % format (2.78% style)
+    - date (+date-history)       -> real date, history's format or
+                                    yyyy-mm-dd fallback (2026-09-03 style)
+    - number (+number-history)   -> real number, history's format or
+                                    #,##0 fallback for grouped history
+    - text                       -> unchanged (durations, names)
+    prefer_date (DATE column): when the probe is uninformative but the
+    value parses as a date, still write a real date (yyyy-mm-dd).
+    Any single-cell failure falls back to stripped text — never raises.
+    """
+    try:
+        kind = infer_cell_kind(probe_cell)
+    except Exception:
+        kind = "text"
+    cell = ws.cell(row=row, column=col)
+    try:
+        if kind in ("percent", "percent-history"):
+            pct = parse_percent_value(value)
+            if pct is None:
+                cell.value = strip_midnight_time(value)
+            else:
+                cell.value = pct
+                if kind == "percent-history":
+                    cell.number_format = PEN_PCT_FMT
+            return
+        if kind in ("date", "date-history"):
+            d = parse_date_value(value)
+            if d is None:
+                cell.value = ""
+            else:
+                cell.value = d
+                if kind == "date-history":
+                    cell.number_format = PEN_DATE_FMT
+            return
+        if kind in ("number", "number-history"):
+            amt = parse_amount_value(value)
+            if amt is None:
+                cell.value = strip_midnight_time(value)
+            else:
+                cell.value = int(amt) if float(amt).is_integer() else amt
+                if kind == "number-history":
+                    cell.number_format = PEN_INT_FMT
+            return
+        if prefer_date:
+            d = parse_date_value(value)
+            if d is not None:
+                cell.value = d
+                cell.number_format = PEN_DATE_FMT
+                return
+        cell.value = strip_midnight_time(value)
+    except Exception as e:
+        logger.warning(f"Penetration cell r{row}c{col} fallback to text: {e}")
+        try:
+            cell.value = strip_midnight_time(value)
+        except Exception:
+            cell.value = "" if value is None else str(value)
+
+
 def _paste_below_header(
     ws, df: pd.DataFrame, header_row: int,
     date_cols=frozenset(), amount_cols=frozenset(),
@@ -404,11 +469,17 @@ def populate_productivity(
         if pen_last_row > pen_header_row:
             _copy_row_format(ws_pen, pen_last_row, pen_next_row)
 
+        # Probe the last history row so each new value follows the
+        # existing column format (typed numbers/dates, not text).
+        # No history yet -> probe cells are empty -> text fallback.
         for c_idx, value in enumerate(dialer_df.iloc[0].values, start=1):
-            # Column 1 is DATE — real Excel date so pivots recognize it.
-            _write_cell(
-                ws_pen, pen_next_row, c_idx, value,
-                is_date_col=(c_idx == 1),
+            try:
+                probe = ws_pen.cell(row=pen_last_row, column=c_idx)
+            except Exception:
+                probe = None
+            _write_penetration_cell(
+                ws_pen, pen_next_row, c_idx, value, probe,
+                prefer_date=(c_idx == 1),
             )
 
         _recreate_table(
