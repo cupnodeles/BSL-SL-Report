@@ -13,7 +13,10 @@ from openpyxl.worksheet.table import Table, TableStyleInfo
 from openpyxl.utils import get_column_letter
 from typing import Optional
 from datetime import datetime, date
-from src.utils import strip_midnight_time, parse_date_value, EXCEL_DATE_FMT
+from src.utils import (
+    strip_midnight_time, parse_date_value, parse_amount_value,
+    EXCEL_DATE_FMT, EXCEL_AMOUNT_FMT,
+)
 import logging
 
 logger = logging.getLogger("BSL_SL")
@@ -271,11 +274,16 @@ def _clear_below_header(ws, header_row: int):
             cell.value = None
 
 
-def _write_cell(ws, row: int, col: int, value, is_date_col: bool = False):
+def _write_cell(
+    ws, row: int, col: int, value,
+    is_date_col: bool = False, is_amount_col: bool = False,
+):
     """
     Writes one value to ws.cell(row, col).
     Date columns are written as REAL Excel dates (m/d/yyyy) so pivot
     tables recognize them — never as text.
+    Amount columns are written as REAL numbers (#,##0.00) so pivots
+    aggregate them and Excel shows no green flag.
     """
     cell = ws.cell(row=row, column=col)
     if is_date_col:
@@ -283,6 +291,14 @@ def _write_cell(ws, row: int, col: int, value, is_date_col: bool = False):
         if d is not None:
             cell.value = d
             cell.number_format = EXCEL_DATE_FMT
+        else:
+            cell.value = ""
+        return
+    if is_amount_col:
+        amt = parse_amount_value(value)
+        if amt is not None:
+            cell.value = amt
+            cell.number_format = EXCEL_AMOUNT_FMT
         else:
             cell.value = ""
         return
@@ -295,14 +311,15 @@ def _write_cell(ws, row: int, col: int, value, is_date_col: bool = False):
 
 
 def _paste_below_header(
-    ws, df: pd.DataFrame, header_row: int, date_cols=frozenset()
+    ws, df: pd.DataFrame, header_row: int,
+    date_cols=frozenset(), amount_cols=frozenset(),
 ) -> int:
     """
     Pastes DataFrame starting at header_row + 1, column A.
     Pure positional paste (A B C D...).
     Skips completely empty rows.
     Columns in date_cols are written as real Excel dates (no "00:00:00",
-    pivot-friendly).
+    pivot-friendly); amount_cols as real numbers (no green flag).
     Returns the actual last row written.
     """
     start_row  = header_row + 1
@@ -324,6 +341,7 @@ def _paste_below_header(
             _write_cell(
                 ws, actual_row, c_idx, value,
                 is_date_col=(col_name in date_cols),
+                is_amount_col=(col_name in amount_cols),
             )
         actual_row += 1
 
@@ -425,6 +443,7 @@ def populate_productivity(
     rem_last = _paste_below_header(
         ws_rem, remedial_df, rem_header_row,
         date_cols={"Date", "PTP Date", "Payment Date"},
+        amount_cols={"PTP Amount", "Payment Amount"},
     )
     _recreate_table(
         ws_rem, rem_table_info,
@@ -459,6 +478,7 @@ def populate_productivity(
     early_last = _paste_below_header(
         ws_early, early_df, early_header_row,
         date_cols={"Date", "PTP Date", "Payment Date"},
+        amount_cols={"PTP Amount", "Payment Amount"},
     )
     _recreate_table(
         ws_early, early_table_info,

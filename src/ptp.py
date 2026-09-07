@@ -14,7 +14,7 @@ from datetime import datetime, date, timedelta
 from openpyxl.utils import get_column_letter, range_boundaries
 from src.utils import (
     get_last_row, clean_date_value, strip_midnight_time,
-    parse_date_value, EXCEL_DATE_FMT,
+    parse_date_value, parse_amount_value, EXCEL_DATE_FMT, EXCEL_AMOUNT_FMT,
 )
 
 logger = logging.getLogger("BPI_BL_SL")
@@ -221,13 +221,15 @@ def _find_ptp_data_sheet(wb) -> str:
     return fallback
 
 
-def extract_ptp_rows(prod_bytes: io.BytesIO) -> pd.DataFrame:
+def extract_ptp_rows(prod_bytes: io.BytesIO):
     """
     Reads the saved Productivity BytesIO [4][5].
     Finds Early SL and Remedial SL sheets dynamically.
     Reads using actual header row found by scanning.
     Filters rows where Status starts with 'PTP'.
-    Returns combined mapped DataFrame for PTP Monitoring [2].
+    Drops rows with blank PTP Date AND zero PTP Amount (reported).
+    Returns (mapped_df, removed_df) — removed_df holds dropped rows
+    with a 'Reason' column for display in the UI.
     """
     logger.info("Extracting PTP rows from Productivity Report...")
 
@@ -329,9 +331,50 @@ def extract_ptp_rows(prod_bytes: io.BytesIO) -> pd.DataFrame:
         if _col in mapped.columns:
             mapped[_col] = mapped[_col].apply(_final_date)
 
+    # ---------------------------------------------------------- #
+    # Drop rows with blank PTP Date AND zero PTP Amount.
+    # Blank amount is NOT zero — only an explicit 0/0.00 counts.
+    # Dropped rows are returned separately for the UI report.
+    # ---------------------------------------------------------- #
+    removed = pd.DataFrame()
+    if "PTP Date" in mapped.columns and "PTP Amount" in mapped.columns:
+        blank_date = mapped["PTP Date"].apply(
+            lambda s: (
+                True
+                if s is None
+                else str(s).strip() in ("", "nan", "None", "NaT", "NaN", "nat")
+            )
+        )
+        def _is_zero_amount(v) -> bool:
+            """True only for an explicit 0/0.00 (blank/unparseable = False)."""
+            try:
+                amt = parse_amount_value(v)
+            except Exception:
+                return False
+            return amt is not None and amt == 0
+
+        zero_amt = mapped["PTP Amount"].apply(_is_zero_amount)
+        drop_mask = (blank_date & zero_amt).fillna(False).astype(bool)
+        if bool(drop_mask.any()):
+            removed = mapped[drop_mask].copy()
+            # 1-based position in the pulled PTP set, for the UI report
+            removed.insert(0, "Source Row #", removed.index + 1)
+            removed["Reason"] = "Blank PTP Date + zero PTP Amount"
+            mapped = mapped[~drop_mask].copy()
+            logger.warning(
+                f"Dropped {len(removed)} PTP row(s) with blank PTP Date "
+                f"and zero PTP Amount."
+            )
+    else:
+        logger.warning(
+            "PTP Date/PTP Amount columns missing — skipping blank/zero filter."
+        )
+
     logger.info(f"Mapped PTP cols: {list(mapped.columns)}")
     logger.info(f"Mapped PTP rows: {len(mapped)}")
-    return mapped.reset_index(drop=True)
+    if len(removed):
+        logger.info(f"Removed PTP rows: {len(removed)}")
+    return mapped.reset_index(drop=True), removed.reset_index(drop=True)
 
 
 def _add_workdays(start: date, n: int) -> date:
@@ -556,6 +599,7 @@ def populate_ptp(template_file, ptp_df: pd.DataFrame) -> io.BytesIO:
 
         # Paste values by column name matching.
         # Date columns -> REAL Excel dates (pivot-friendly, m/d/yyyy).
+        # PTP Amount   -> REAL numbers (#,##0.00, no green flag).
         row_dict = dict(zip(ptp_df.columns, row_data))
         for col_name, value in row_dict.items():
             if col_name in col_index_map:
@@ -567,6 +611,21 @@ def populate_ptp(template_file, ptp_df: pd.DataFrame) -> io.BytesIO:
                         cell.value = d
                         cell.number_format = EXCEL_DATE_FMT
                     else:
+                        cell.value = ""
+                elif col_name == "PTP Amount":
+                    amt = parse_amount_value(value)
+                    if amt is not None:
+                        cell.value = amt
+                        cell.number_format = EXCEL_AMOUNT_FMT
+                    else:
+                        if value is not None and str(value).strip() not in (
+                            "", "nan", "None", "NaT", "NaN", "nat",
+                        ):
+                            logger.warning(
+                                f"Unparseable PTP Amount "
+                                f"'{value}' at row {actual_row} — "
+                                f"left blank."
+                            )
                         cell.value = ""
                 else:
                     cleaned = strip_midnight_time(value)

@@ -155,6 +155,9 @@ def clean_date_value(value):
 # (m/d/yyyy shows 9/1/2026 style; Excel pads to 01/09/2026 with mm/dd/yyyy).
 EXCEL_DATE_FMT = "m/d/yyyy"
 
+# Display format for amount cells — real numbers, no green flag.
+EXCEL_AMOUNT_FMT = "#,##0.00"
+
 
 def parse_date_value(value):
     """
@@ -192,5 +195,53 @@ def parse_date_value(value):
         return parsed.date()
     try:
         return parsed.date()
+    except Exception:
+        return None
+
+
+def parse_amount_value(value):
+    """
+    Parses an AMOUNT-column value into a float for Excel output.
+    Real numbers (not text) keep pivot tables aggregating and avoid
+    the green "number stored as text" flag.
+
+    - Strips commas, spaces and currency symbols (₱, PHP, $).
+    - "(1,234.56)" parentheses count as negative.
+    - Blank/NaN/unparseable -> None (cell left blank, never crashes).
+    NOTE: blank is NOT zero — callers decide how to treat None.
+    """
+    if value is None:
+        return None
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, (int, float)):
+        try:
+            import math
+            if isinstance(value, float) and (
+                math.isnan(value) or math.isinf(value)
+            ):
+                return None
+        except Exception:
+            pass
+        return float(value)
+    if isinstance(value, datetime):
+        return None
+    s = str(value).strip()
+    if s in ("", "nan", "None", "NaT", "NaN", "nat", "-", "--", "N/A", "n/a"):
+        return None
+    try:
+        neg = False
+        if s.startswith("(") and s.endswith(")"):
+            neg = True
+            s = s[1:-1].strip()
+        # Drop currency symbols/codes and spaces, keep digits . , -
+        s = re.sub(r"(?i)^php\s*", "", s)     # PHP prefix
+        s = re.sub(r"^[Pp](?=[\s\d])", "", s)  # P prefix (P 1,200 / P1,200)
+        s = re.sub(r"[₱$\s]", "", s)
+        s = s.replace(",", "")
+        if s in ("", "-", ".", "-."):
+            return None
+        num = float(s)
+        return -num if neg else num
     except Exception:
         return None

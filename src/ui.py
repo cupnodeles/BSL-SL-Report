@@ -30,6 +30,7 @@ def _init_session_state():
         "ptp_encrypted":    None,
         "prod_filename":    None,
         "ptp_filename":     None,
+        "removed_rows":     None,
         "automation_done":  False,
         "automation_error": None,
     }
@@ -151,6 +152,7 @@ def launch_app():
         st.session_state.ptp_encrypted   = None
         st.session_state.prod_filename   = None
         st.session_state.ptp_filename    = None
+        st.session_state.removed_rows    = None
         st.session_state.automation_done  = False
         st.session_state.automation_error = None
 
@@ -211,6 +213,33 @@ def launch_app():
                     "💡 Remember to manually refresh pivot tables "
                     "after opening the files in Excel."
                 )
+
+            # ------------------------------------------------------ #
+            # Removed PTP rows report — persists via session_state
+            # ------------------------------------------------------ #
+            removed = st.session_state.removed_rows
+            if removed is not None and len(removed):
+                st.markdown("---")
+                st.subheader("⚠️ Removed PTP Rows")
+                st.warning(
+                    f"{len(removed)} PTP row(s) were excluded from the "
+                    f"PTP Monitoring Report (blank PTP Date + zero "
+                    f"PTP Amount)."
+                )
+                show_cols = [
+                    c for c in [
+                        "Source Row #", "Name", "LAN", "Status",
+                        "PTP Date", "PTP Amount", "Reason",
+                    ]
+                    if c in removed.columns
+                ]
+                st.dataframe(
+                    removed[show_cols] if show_cols else removed,
+                    use_container_width=True,
+                    key="tbl_removed",
+                )
+            elif removed is not None:
+                st.success("✅ No PTP rows removed — all rows valid.")
 
 
 def run_automation(
@@ -291,7 +320,19 @@ def run_automation(
 
         # CRITICAL: Reset prod_out position before passing to extract_ptp_rows
         prod_out.seek(0)
-        ptp_df = extract_ptp_rows(prod_out)
+        ptp_df, removed_df = extract_ptp_rows(prod_out)
+        if len(removed_df):
+            status.warning(
+                f"⚠️ {len(removed_df)} PTP row(s) removed "
+                f"(blank PTP Date + zero PTP Amount). "
+                f"See details below."
+            )
+            logger.warning(
+                f"Removed PTP rows: {len(removed_df)} "
+                f"(blank PTP Date + zero PTP Amount)."
+            )
+        else:
+            logger.info("Removed PTP rows: 0.")
 
         # CRITICAL: Reset again before populating productivity output
         prod_out.seek(0)
@@ -343,6 +384,7 @@ def run_automation(
         st.session_state.ptp_encrypted   = ptp_data
         st.session_state.prod_filename   = get_output_filename(PROD_PREFIX)
         st.session_state.ptp_filename    = get_output_filename(PTP_PREFIX)
+        st.session_state.removed_rows    = removed_df
         st.session_state.automation_done  = True
         st.session_state.automation_error = None
 
