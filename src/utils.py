@@ -151,19 +151,19 @@ def clean_date_value(value):
     return s
 
 
-# Display format for date cells written by the automation
-# (m/d/yyyy shows 9/1/2026 style; Excel pads to 01/09/2026 with mm/dd/yyyy).
-EXCEL_DATE_FMT = "m/d/yyyy"
+# Display format for date cells written by the automation (DD/MM/YYYY).
+EXCEL_DATE_FMT = "dd/mm/yyyy"
 
 # Display format for amount cells — real numbers, no green flag.
 EXCEL_AMOUNT_FMT = "#,##0.00"
 
 # Fallback display formats for the Penetration sheet, used only when the
 # history row gives no usable format. They mimic the existing history
-# style (yyyy-mm-dd dates, 0.00% percents, #,##0 balances).
-PEN_DATE_FMT = "yyyy-mm-dd"
+# style (DD/MM/YYYY dates, 0.00% percents, #,##0 balances, hh:mm:ss times).
+PEN_DATE_FMT = "dd/mm/yyyy"
 PEN_PCT_FMT = "0.00%"
 PEN_INT_FMT = "#,##0"
+PEN_DUR_FMT = "hh:mm:ss"
 
 
 def parse_date_value(value):
@@ -308,14 +308,15 @@ def infer_cell_kind(cell) -> str:
     Probes a history-row cell to decide how the new row's value in the
     same column should be typed ("follow the format").
 
-    Returns one of: "percent" | "date" | "number" |
-    "percent-history" | "date-history" | "number-history" | "text".
-    - "percent"/"date"/"number": history cell is already typed — reuse
-      its number format as-is.
-    - "*-history": history cell is TEXT that looks like a percent, date
-      or grouped number — callers should write a typed value with an
-      explicit fallback format that looks identical (PEN_*_FMT).
-    - "text": durations, names and anything else — write text unchanged.
+    Returns one of: "percent" | "date" | "number" | "duration" |
+    "percent-history" | "date-history" | "number-history" |
+    "duration-history" | "text".
+    - "percent"/"date"/"number"/"duration": history cell is already
+      typed — reuse its number format as-is.
+    - "*-history": history cell is TEXT that looks like a percent, date,
+      grouped number or duration — callers should write a typed value
+      with an explicit fallback format that looks identical (PEN_*_FMT).
+    - "text": names and anything else — write text unchanged.
     """
     try:
         v = cell.value
@@ -329,6 +330,8 @@ def infer_cell_kind(cell) -> str:
         return "date"
     if isinstance(v, date):
         return "date"
+    if isinstance(v, (timedelta, time)):
+        return "duration"
     if isinstance(v, (int, float)):
         try:
             fmt = str(getattr(cell, "number_format", "") or "")
@@ -338,6 +341,8 @@ def infer_cell_kind(cell) -> str:
             return "percent"
         if _is_date_format(fmt):
             return "date"
+        if _is_time_format(fmt):
+            return "duration"
         return "number"
     if isinstance(v, str):
         s = v.strip()
@@ -350,6 +355,10 @@ def infer_cell_kind(cell) -> str:
             and parse_amount_value(s.replace("%", "")) is not None
         ):
             return "percent-history" if "%" not in fmt else "percent"
+        if _is_time_format(fmt) or (
+            _looks_like_duration_text(s) and not _looks_like_date_text(s)
+        ):
+            return "duration" if _is_time_format(fmt) else "duration-history"
         if _is_date_format(fmt) or _looks_like_date_text(s):
             return "date" if _is_date_format(fmt) else "date-history"
         if "," in s and parse_amount_value(s) is not None:
@@ -358,14 +367,91 @@ def infer_cell_kind(cell) -> str:
     return "text"
 
 
+def _strip_fmt_literals(fmt: str) -> str:
+    """Removes quoted literals, escaped chars and [...] conditions."""
+    f = re.sub(r'"[^"]*"', "", fmt or "")
+    f = re.sub(r"\[[^\]]*\]", "", f)
+    return f.replace("\\", "").lower()
+
+
 def _is_date_format(fmt: str) -> bool:
-    """Heuristic: does an Excel number-format string render dates?"""
-    f = (fmt or "").lower()
+    """
+    Heuristic: does an Excel number-format string render dates?
+    Time-only formats (hh:mm:ss, mm:ss, [h]:mm:ss) are NOT dates —
+    they need year/day tokens (y/d/mmm) to qualify.
+    """
+    f = _strip_fmt_literals(fmt)
     if not f or f in ("general", "@"):
         return False
-    # Strip quoted literals and escaped chars, then look for date tokens.
-    f = re.sub(r'"[^"]*"', "", f)
-    f = f.replace("\\", "")
-    return any(tok in f for tok in (
-        "yyyy", "yy", "mmm", "mm", "dd", "d/m", "m/d",
-    ))
+    return ("y" in f) or ("d" in f)
+
+
+def _is_time_format(fmt: str) -> bool:
+    """Heuristic: time-only format (has h/s tokens, no year/day tokens)."""
+    f = _strip_fmt_literals(fmt)
+    if not f or f in ("general", "@"):
+        return False
+    if ("y" in f) or ("d" in f):
+        return False
+    return ("h" in f) or ("s" in f)
+
+
+_DURATION_TEXT_RE = re.compile(r"^\d{1,3}:\d{2}(:\d{2})?$")
+
+
+def _looks_like_duration_text(s: str) -> bool:
+    """True for '04:06:12' / '00:01:31' / '4:06' style strings."""
+    return bool(_DURATION_TEXT_RE.match(s.strip()))
+
+
+def parse_duration_value(value):
+    """
+    Parses a DURATION-column value into a fraction of a day for Excel
+    output ("02:42:36" -> 0.11292, which hh:mm:ss renders back as
+    02:42:36 — same look as history durations, but typed).
+
+    Accepts time / timedelta / datetime (time part) / "HH:MM:SS" /
+    "MM:SS" strings / numeric fractions in [0, 1) / seconds (>= 1).
+    Blank/NaN/unparseable -> None (cell left blank, never crashes).
+    """
+    if value is None:
+        return None
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, datetime):
+        t = value.time()
+        return (t.hour * 3600 + t.minute * 60 + t.second) / 86400.0
+    if isinstance(value, timedelta):
+        return value.total_seconds() / 86400.0
+    if isinstance(value, time):
+        return (
+            value.hour * 3600 + value.minute * 60 + value.second
+        ) / 86400.0
+    if isinstance(value, (int, float)):
+        try:
+            import math
+            if isinstance(value, float) and (
+                math.isnan(value) or math.isinf(value)
+            ):
+                return None
+        except Exception:
+            pass
+        f = float(value)
+        if f < 0:
+            return None
+        return f if f < 1 else f / 86400.0
+    s = str(value).strip()
+    if s in ("", "nan", "None", "NaT", "NaN", "nat", "-", "--", "N/A", "n/a"):
+        return None
+    m = re.match(r"^(\d{1,3}):(\d{2})(?::(\d{2}))?$", s)
+    if m:
+        h, mi, sec = m.group(1), m.group(2), m.group(3)
+        try:
+            if sec is None:
+                total = int(mi) * 60  # MM:SS
+            else:
+                total = int(h) * 3600 + int(mi) * 60 + int(sec)
+        except Exception:
+            return None
+        return total / 86400.0
+    return None

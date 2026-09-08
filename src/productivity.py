@@ -15,9 +15,9 @@ from typing import Optional
 from datetime import datetime, date
 from src.utils import (
     strip_midnight_time, parse_date_value, parse_amount_value,
-    parse_percent_value, infer_cell_kind,
+    parse_percent_value, parse_duration_value, infer_cell_kind,
     EXCEL_DATE_FMT, EXCEL_AMOUNT_FMT,
-    PEN_DATE_FMT, PEN_PCT_FMT, PEN_INT_FMT,
+    PEN_PCT_FMT, PEN_INT_FMT, PEN_DUR_FMT,
 )
 import logging
 
@@ -319,10 +319,13 @@ def _write_penetration_cell(ws, row: int, col: int, value, probe_cell,
     existing history row's format (see utils.infer_cell_kind):
     - percent (+percent-history) -> fraction + % format (2.78% style)
     - date (+date-history)       -> real date, history's format or
-                                    yyyy-mm-dd fallback (2026-09-03 style)
+                                    dd/mm/yyyy fallback
+    - duration (+duration-history) -> fraction of day + time format
+                                    (02:42:36 style, never 00:00:00
+                                    unless the source is truly zero)
     - number (+number-history)   -> real number, history's format or
                                     #,##0 fallback for grouped history
-    - text                       -> unchanged (durations, names)
+    - text                       -> unchanged (names)
     prefer_date (DATE column): when the probe is uninformative but the
     value parses as a date, still write a real date (yyyy-mm-dd).
     Any single-cell failure falls back to stripped text — never raises.
@@ -347,9 +350,10 @@ def _write_penetration_cell(ws, row: int, col: int, value, probe_cell,
             if d is None:
                 cell.value = ""
             else:
+                # DD/MM/YYYY everywhere (user requirement) — real date,
+                # so filters/pivots still recognize it.
                 cell.value = d
-                if kind == "date-history":
-                    cell.number_format = PEN_DATE_FMT
+                cell.number_format = EXCEL_DATE_FMT
             return
         if kind in ("number", "number-history"):
             amt = parse_amount_value(value)
@@ -360,11 +364,20 @@ def _write_penetration_cell(ws, row: int, col: int, value, probe_cell,
                 if kind == "number-history":
                     cell.number_format = PEN_INT_FMT
             return
+        if kind in ("duration", "duration-history"):
+            dur = parse_duration_value(value)
+            if dur is None:
+                cell.value = strip_midnight_time(value)
+            else:
+                cell.value = dur
+                if kind == "duration-history":
+                    cell.number_format = PEN_DUR_FMT
+            return
         if prefer_date:
             d = parse_date_value(value)
             if d is not None:
                 cell.value = d
-                cell.number_format = PEN_DATE_FMT
+                cell.number_format = EXCEL_DATE_FMT
                 return
         cell.value = strip_midnight_time(value)
     except Exception as e:
