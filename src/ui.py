@@ -11,7 +11,9 @@ import streamlit as st
 import logging
 from src.utils import setup_logger, get_output_filename
 from src.dialer import extract_dialer_data
-from src.drr import clean_drr, split_drr, map_remedial, map_early
+from src.drr import (
+    clean_drr, split_drr, map_remedial, map_early, drr_latest_date,
+)
 from src.productivity import populate_productivity
 from src.ptp import extract_ptp_rows, populate_ptp
 from src.encrypt import encrypt_file, decrypt_file, is_encrypted
@@ -428,6 +430,17 @@ def run_automation(
             f"Remedial rows: {len(remedial_df)} | "
             f"Early rows: {len(early_df)}"
         )
+        # Filename date = latest DRR Date (falls back to yesterday).
+        try:
+            report_date = drr_latest_date(clean_df)
+        except Exception as e:
+            logger.warning(f"Could not derive report date: {e}")
+            report_date = None
+        if report_date is not None:
+            status.info(
+                f"📅 Report date from DRR: "
+                f"{report_date.strftime('%m/%d/%Y')}"
+            )
         progress.progress(35)
 
         # ---------------------------------------------------------- #
@@ -548,8 +561,12 @@ def run_automation(
         # Store in session_state so downloads persist after reruns
         st.session_state.prod_encrypted  = prod_data
         st.session_state.ptp_encrypted   = ptp_data
-        st.session_state.prod_filename   = get_output_filename(PROD_PREFIX)
-        st.session_state.ptp_filename    = get_output_filename(PTP_PREFIX)
+        st.session_state.prod_filename   = get_output_filename(
+            PROD_PREFIX, report_date
+        )
+        st.session_state.ptp_filename    = get_output_filename(
+            PTP_PREFIX, report_date
+        )
         st.session_state.removed_rows    = removed_df
         st.session_state.reset_info      = reset_info
         st.session_state.pen_reset_info  = pen_reset_info

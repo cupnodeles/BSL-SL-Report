@@ -31,11 +31,19 @@ def get_yesterday_date() -> datetime:
         return today - timedelta(days=1)
 
 
-def get_output_filename(prefix: str) -> str:
+def get_output_filename(prefix: str, report_date=None) -> str:
     """
-    Generates output filename with yesterday's date suffix.
-    Example: SPM Productivity & Penetration Report_BSL-early&remedial_07212026.xlsx
+    Generates output filename with a date suffix (MMDDYYYY).
+    Uses report_date (latest DRR Date) when given; otherwise falls back
+    to yesterday's date logic.
+    Example: SPM Productivity & Penetration Report_BSL-early&remedial_09082026.xlsx
     """
+    if report_date is not None:
+        try:
+            date_str = report_date.strftime("%m%d%Y")
+            return f"{prefix}_{date_str}.xlsx"
+        except Exception:
+            pass
     date = get_yesterday_date()
     date_str = date.strftime("%m%d%Y")
     return f"{prefix}_{date_str}.xlsx"

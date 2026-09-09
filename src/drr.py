@@ -169,6 +169,60 @@ def clean_drr(file) -> pd.DataFrame:
     return df.reset_index(drop=True)
 
 
+def _parse_report_date_value(v):
+    """
+    Parses one cleaned-DRR Date value into a date (or None).
+    cleaned DRR values are strings: ISO dates, ISO datetimes
+    ("2026-09-08 14:30:00" -> date part), or dd/mm/yyyy texts
+    (day-first, PH convention). Never raises.
+    """
+    if v is None:
+        return None
+    if isinstance(v, datetime):
+        return v.date()
+    if isinstance(v, date):
+        return v
+    s = str(v).strip()
+    if s in ("", "nan", "None", "NaT", "NaN", "nat"):
+        return None
+    try:
+        if re.match(r"^\d{1,2}/\d{1,2}/\d{4}", s):
+            p = pd.to_datetime(s, errors="coerce", dayfirst=True)
+        else:
+            p = pd.to_datetime(s, errors="coerce")
+        if p is None or pd.isna(p):
+            return None
+        return p.date()
+    except Exception:
+        return None
+
+
+def drr_latest_date(clean_df):
+    """
+    Returns the latest parseable Date across cleaned DRR rows, for use
+    as the output filename date. Returns None when the Date column is
+    missing or nothing parses (caller falls back to yesterday logic).
+    """
+    if clean_df is None or len(clean_df) == 0:
+        return None
+    if "Date" not in clean_df.columns:
+        logger.warning("DRR has no 'Date' column — filename falls back.")
+        return None
+    best = None
+    for v in clean_df["Date"].tolist():
+        try:
+            d = _parse_report_date_value(v)
+        except Exception:
+            continue
+        if d is not None and (best is None or d > best):
+            best = d
+    if best is None:
+        logger.warning("No parseable DRR dates — filename falls back.")
+    else:
+        logger.info(f"Report date from DRR: {best.isoformat()}")
+    return best
+
+
 def split_drr(df: pd.DataFrame):
     """
     Splits cleaned DRR into Remedial and Early SL DataFrames.
