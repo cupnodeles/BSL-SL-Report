@@ -490,7 +490,126 @@ def _expand_tables(ws, header_row: int, new_last_row: int):
             logger.warning(f"Could not expand table: {e}")
 
 
-def populate_ptp(template_file, ptp_df: pd.DataFrame) -> io.BytesIO:
+def _month_key(value):
+    """
+    Returns (year, month) for a date/datetime/parseable date string,
+    else None. Slash dates parse day-first (PH dd/mm/yyyy convention);
+    ISO strings are unambiguous either way. Only (year, month) is ever
+    compared, so day-level ambiguity cannot matter.
+    """
+    if value is None:
+        return None
+    if isinstance(value, datetime):
+        return (value.year, value.month)
+    if isinstance(value, date):
+        return (value.year, value.month)
+    s = str(value).strip()
+    if s in ("", "nan", "None", "NaT", "NaN", "nat"):
+        return None
+    try:
+        import pandas as pd
+        # Slash dates follow PH dd/mm/yyyy (dayfirst); ISO and everything
+        # else use default parsing. (dayfirst must NOT touch ISO strings
+        # — pandas applies it to Y-M-D too and swaps them.)
+        if re.match(r"^\d{1,2}/\d{1,2}/\d{4}", s):
+            p = pd.to_datetime(s, errors="coerce", dayfirst=True)
+        else:
+            p = pd.to_datetime(s, errors="coerce")
+        if p is None or pd.isna(p):
+            return None
+        return (p.year, p.month)
+    except Exception:
+        return None
+
+
+def _month_label(ym) -> str:
+    """(2026, 10) -> 'Oct 2026'."""
+    try:
+        return date(ym[0], ym[1], 1).strftime("%b %Y")
+    except Exception:
+        return f"{ym[0]}-{ym[1]:02d}"
+
+
+def _incoming_latest_month(ptp_df: pd.DataFrame):
+    """Latest (year, month) across incoming PTP Date (fallback Date)."""
+    for col in ("PTP Date", "Date"):
+        if col in ptp_df.columns and len(ptp_df):
+            months = [
+                m for m in (_month_key(v) for v in ptp_df[col].tolist())
+                if m is not None
+            ]
+            if months:
+                return max(months)
+    return None
+
+
+def _existing_probe(ws, header_row: int, col_index_map: dict):
+    """
+    Scans current PTP List rows for the latest (year, month) and the
+    data-row count. Prefers the PTP Date column, falls back to Date.
+    Returns (latest_month_or_None, data_row_count).
+    """
+    target_col = col_index_map.get("PTP Date") or col_index_map.get("Date")
+    if not target_col:
+        return None, 0
+    months = []
+    count = 0
+    for row_idx in range(header_row + 1, ws.max_row + 1):
+        first = ws.cell(row=row_idx, column=1).value
+        if first is None or str(first).strip() == "":
+            continue
+        count += 1
+        m = _month_key(ws.cell(row=row_idx, column=target_col).value)
+        if m is not None:
+            months.append(m)
+    return (max(months) if months else None), count
+
+
+def _reset_ptp_data(ws, header_row: int) -> int:
+    """
+    Monthly reset: clears all data values below the header row and
+    shrinks every Excel Table to header-only (so filters show no ghost
+    blank rows). Headers, formats and table styles are untouched.
+    Returns the number of cleared data rows.
+    """
+    cleared = 0
+    for row_idx in range(header_row + 1, ws.max_row + 1):
+        has_data = False
+        for c_idx in range(1, ws.max_column + 1):
+            v = ws.cell(row=row_idx, column=c_idx).value
+            if v is not None and str(v).strip() != "":
+                has_data = True
+                ws.cell(row=row_idx, column=c_idx).value = None
+        if has_data:
+            cleared += 1
+    try:
+        tables = list(ws.tables.values())
+    except Exception as e:
+        logger.warning(f"Could not list tables for reset: {e}")
+        return cleared
+    for tbl in tables:
+        if isinstance(tbl, str):
+            continue
+        try:
+            min_col, _, max_col, _ = range_boundaries(tbl.ref)
+            new_ref = (
+                f"{get_column_letter(min_col)}{header_row}:"
+                f"{get_column_letter(max_col)}{header_row}"
+            )
+            tbl.ref = new_ref
+            if getattr(tbl, "autoFilter", None) is not None:
+                try:
+                    tbl.autoFilter.ref = new_ref
+                except Exception:
+                    pass
+            logger.info(f"Reset table '{tbl.displayName}' to {new_ref}")
+        except Exception as e:
+            logger.warning(f"Could not reset table: {e}")
+    return cleared
+
+
+def populate_ptp(template_file, ptp_df: pd.DataFrame,
+                 new_month: bool = False):
     """
     Appends PTP rows to the bottom of 'PTP List' sheet [2].
     Copies row format from the row above (fixes formatting mismatch).
@@ -499,7 +618,10 @@ def populate_ptp(template_file, ptp_df: pd.DataFrame) -> io.BytesIO:
     Auto-fills 'Holding Date' with VALUES (WORKDAY of PTP Date + 2).
     Expands Excel Table(s) to cover new rows.
     Strips midnight "00:00:00" from date values.
-    Returns modified workbook as BytesIO.
+    Monthly reset: when new_month is True, or incoming data's month is
+    newer than existing rows' month, all existing data rows are cleared
+    first (tables shrunk to header-only, then re-expanded).
+    Returns (BytesIO, info dict) with reset details for the UI.
     """
     logger.info("Loading PTP Monitoring Template...")
 
@@ -530,7 +652,70 @@ def populate_ptp(template_file, ptp_df: pd.DataFrame) -> io.BytesIO:
     ]
     logger.info(f"PTP sheet headers: {ptp_headers}")
 
-    # Find last data row strictly below header
+    # Build column index map: header_name -> col_index (1-based)
+    col_index_map = {
+        name: idx + 1
+        for idx, name in enumerate(ptp_headers)
+        if name
+    }
+    logger.info(f"PTP col index map: {col_index_map}")
+
+    # ---------------------------------------------------------- #
+    # Monthly reset decision (PTP List only).
+    # Manual toggle wins; otherwise auto-fire when incoming data's
+    # latest month is newer than existing rows' latest month.
+    # Never wipes when there is nothing incoming to replace with.
+    # ---------------------------------------------------------- #
+    reset_info = {
+        "reset": False, "cleared": 0, "mode": "same-month",
+        "incoming": None, "existing": None, "existing_rows": 0,
+    }
+    incoming_month, (existing_month, existing_rows) = (
+        _incoming_latest_month(ptp_df),
+        _existing_probe(ws, header_row, col_index_map),
+    )
+    reset_info["existing_rows"] = existing_rows
+    if incoming_month is not None:
+        reset_info["incoming"] = _month_label(incoming_month)
+    if existing_month is not None:
+        reset_info["existing"] = _month_label(existing_month)
+
+    do_reset, reset_mode = False, "same-month"
+    if len(ptp_df) == 0:
+        reset_mode = "no-incoming"
+        logger.info("No incoming PTP rows — monthly reset disabled.")
+    elif new_month and existing_rows > 0:
+        do_reset, reset_mode = True, "manual"
+    elif new_month:
+        reset_mode = "manual-empty"
+        logger.info("New Month toggle ON but PTP sheet is already empty.")
+    elif (
+        incoming_month is not None
+        and existing_month is not None
+        and incoming_month > existing_month
+    ):
+        do_reset, reset_mode = True, "auto"
+
+    if do_reset:
+        cleared = _reset_ptp_data(ws, header_row)
+        reset_info.update(
+            {"reset": True, "cleared": cleared, "mode": reset_mode}
+        )
+        logger.warning(
+            f"Monthly PTP reset ({reset_mode}): cleared {cleared} "
+            f"existing row(s) "
+            f"(existing {reset_info['existing']} -> "
+            f"incoming {reset_info['incoming']})."
+        )
+    else:
+        reset_info["mode"] = reset_mode
+        logger.info(
+            f"No monthly reset (mode={reset_mode}; "
+            f"existing={reset_info['existing']}, "
+            f"incoming={reset_info['incoming']})."
+        )
+
+    # Find last data row strictly below header (after any reset)
     last_data_row = header_row
     for row_idx in range(header_row + 1, ws.max_row + 1):
         cell_val = ws.cell(row=row_idx, column=1).value
@@ -543,14 +728,6 @@ def populate_ptp(template_file, ptp_df: pd.DataFrame) -> io.BytesIO:
         f"Last data row: {last_data_row} | "
         f"Pasting at row: {next_row}"
     )
-
-    # Build column index map: header_name -> col_index (1-based)
-    col_index_map = {
-        name: idx + 1
-        for idx, name in enumerate(ptp_headers)
-        if name
-    }
-    logger.info(f"PTP col index map: {col_index_map}")
 
     # Get max column count for format copying
     max_col = max(col_index_map.values()) if col_index_map else ws.max_column
@@ -598,7 +775,7 @@ def populate_ptp(template_file, ptp_df: pd.DataFrame) -> io.BytesIO:
             copy_row_format(source_format_row, actual_row)
 
         # Paste values by column name matching.
-        # Date columns -> REAL Excel dates (pivot-friendly, m/d/yyyy).
+        # Date columns -> REAL Excel dates (pivot-friendly, dd/mm/yyyy).
         # PTP Amount   -> REAL numbers (#,##0.00, no green flag).
         row_dict = dict(zip(ptp_df.columns, row_data))
         for col_name, value in row_dict.items():
@@ -659,4 +836,4 @@ def populate_ptp(template_file, ptp_df: pd.DataFrame) -> io.BytesIO:
     wb.save(output)
     output.seek(0)
     logger.info("PTP Monitoring Report populated successfully.")
-    return output
+    return output, reset_info

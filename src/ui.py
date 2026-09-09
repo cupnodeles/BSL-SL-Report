@@ -91,6 +91,7 @@ def _init_session_state():
         "prod_filename":    None,
         "ptp_filename":     None,
         "removed_rows":     None,
+        "reset_info":       None,
         "automation_done":  False,
         "automation_error": None,
     }
@@ -187,6 +188,20 @@ def launch_app():
                 "Please refresh manually after opening the files."
             )
 
+    new_month_run = st.toggle(
+        "🗓 New Month Run",
+        value=False,
+        help="ON = wipe all existing PTP List records before pasting. "
+             "OFF = auto-wipe only when incoming data is a newer month "
+             "than the existing records.",
+        key="toggle_newmonth",
+    )
+    if new_month_run:
+        st.info(
+            "🗓 New Month Run is ON — existing PTP records will be "
+            "cleared and replaced."
+        )
+
     st.markdown("---")
 
     # ------------------------------------------------------------------ #
@@ -215,13 +230,14 @@ def launch_app():
         st.session_state.prod_filename   = None
         st.session_state.ptp_filename    = None
         st.session_state.removed_rows    = None
+        st.session_state.reset_info      = None
         st.session_state.automation_done  = False
         st.session_state.automation_error = None
 
         run_automation(
             dialer_file, drr_file,
             prod_template, ptp_template,
-            auto_refresh
+            auto_refresh, new_month_run,
         )
 
     # ------------------------------------------------------------------ #
@@ -303,11 +319,37 @@ def launch_app():
             elif removed is not None:
                 st.success("✅ No PTP rows removed — all rows valid.")
 
+            # ------------------------------------------------------ #
+            # Monthly reset report — persists via session_state
+            # ------------------------------------------------------ #
+            reset = st.session_state.reset_info
+            if reset is not None and reset.get("reset"):
+                if reset.get("mode") == "manual":
+                    how = "manual New Month Run"
+                else:
+                    how = (
+                        f"auto-detected new month "
+                        f"({reset.get('existing')} -> "
+                        f"{reset.get('incoming')})"
+                    )
+                st.warning(
+                    f"🗓 Monthly reset ({how}): cleared "
+                    f"{reset.get('cleared', 0)} existing PTP record(s) "
+                    f"before pasting."
+                )
+            elif reset is not None:
+                st.info(
+                    f"📅 Same-month run — kept "
+                    f"{reset.get('existing_rows', 0)} existing PTP "
+                    f"record(s)."
+                )
+
 
 def run_automation(
     dialer_file, drr_file,
     prod_template, ptp_template,
-    auto_refresh: bool
+    auto_refresh: bool,
+    new_month: bool = False,
 ):
     """Main automation runner with progress tracking."""
 
@@ -398,7 +440,23 @@ def run_automation(
 
         # CRITICAL: Reset again before populating productivity output
         prod_out.seek(0)
-        ptp_out = populate_ptp(ptp_bytes, ptp_df)
+        ptp_out, reset_info = populate_ptp(
+            ptp_bytes, ptp_df, new_month=new_month
+        )
+        if reset_info.get("reset"):
+            mode_txt = (
+                "manual New Month Run"
+                if reset_info.get("mode") == "manual"
+                else (
+                    f"auto-detected new month "
+                    f"({reset_info.get('existing')} -> "
+                    f"{reset_info.get('incoming')})"
+                )
+            )
+            status.warning(
+                f"🗓 Monthly reset ({mode_txt}): cleared "
+                f"{reset_info.get('cleared', 0)} existing PTP record(s)."
+            )
         logger.info(f"PTP rows pasted: {len(ptp_df)}")
         progress.progress(70)
         # ---------------------------------------------------------- #
@@ -447,6 +505,7 @@ def run_automation(
         st.session_state.prod_filename   = get_output_filename(PROD_PREFIX)
         st.session_state.ptp_filename    = get_output_filename(PTP_PREFIX)
         st.session_state.removed_rows    = removed_df
+        st.session_state.reset_info      = reset_info
         st.session_state.automation_done  = True
         st.session_state.automation_error = None
 
