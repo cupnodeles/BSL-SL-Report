@@ -92,6 +92,7 @@ def _init_session_state():
         "ptp_filename":     None,
         "removed_rows":     None,
         "reset_info":       None,
+        "pen_reset_info":   None,
         "automation_done":  False,
         "automation_error": None,
     }
@@ -191,15 +192,15 @@ def launch_app():
     new_month_run = st.toggle(
         "🗓 New Month Run",
         value=False,
-        help="ON = wipe all existing PTP List records before pasting. "
-             "OFF = auto-wipe only when incoming data is a newer month "
-             "than the existing records.",
+        help="ON = wipe all existing PTP List AND Penetration records "
+             "before pasting. OFF = auto-wipe a sheet only when incoming "
+             "data is a newer month than its existing records.",
         key="toggle_newmonth",
     )
     if new_month_run:
         st.info(
-            "🗓 New Month Run is ON — existing PTP records will be "
-            "cleared and replaced."
+            "🗓 New Month Run is ON — existing PTP and Penetration "
+            "records will be cleared and replaced."
         )
 
     st.markdown("---")
@@ -231,6 +232,7 @@ def launch_app():
         st.session_state.ptp_filename    = None
         st.session_state.removed_rows    = None
         st.session_state.reset_info      = None
+        st.session_state.pen_reset_info  = None
         st.session_state.automation_done  = False
         st.session_state.automation_error = None
 
@@ -344,6 +346,35 @@ def launch_app():
                     f"record(s)."
                 )
 
+            # ------------------------------------------------------ #
+            # Penetration monthly reset report — via session_state
+            # ------------------------------------------------------ #
+            pen_reset = st.session_state.pen_reset_info
+            if pen_reset is not None and pen_reset.get("reset"):
+                if pen_reset.get("mode") == "manual":
+                    pen_how = "manual New Month Run"
+                else:
+                    pen_how = (
+                        f"auto-detected new month "
+                        f"({pen_reset.get('existing')} -> "
+                        f"{pen_reset.get('incoming')})"
+                    )
+                st.warning(
+                    f"🗓 Penetration monthly reset ({pen_how}): cleared "
+                    f"{pen_reset.get('cleared', 0)} existing record(s) "
+                    f"before pasting."
+                )
+            elif pen_reset is not None and pen_reset.get("mode") == (
+                "skipped-no-dialer"
+            ):
+                st.info("📅 Penetration skipped — no Dialer Report.")
+            elif pen_reset is not None:
+                st.info(
+                    f"📅 Same-month run — kept "
+                    f"{pen_reset.get('existing_rows', 0)} existing "
+                    f"Penetration record(s)."
+                )
+
 
 def run_automation(
     dialer_file, drr_file,
@@ -407,9 +438,24 @@ def run_automation(
         if is_encrypted(prod_bytes):
             logger.info("Productivity template encrypted. Decrypting...")
             prod_bytes = decrypt_file(prod_bytes)
-        prod_out = populate_productivity(
-            prod_bytes, dialer_df, early_df, remedial_df
+        prod_out, pen_reset_info = populate_productivity(
+            prod_bytes, dialer_df, early_df, remedial_df,
+            new_month=new_month,
         )
+        if pen_reset_info.get("reset"):
+            mode_txt = (
+                "manual New Month Run"
+                if pen_reset_info.get("mode") == "manual"
+                else (
+                    f"auto-detected new month "
+                    f"({pen_reset_info.get('existing')} -> "
+                    f"{pen_reset_info.get('incoming')})"
+                )
+            )
+            status.warning(
+                f"🗓 Penetration monthly reset ({mode_txt}): cleared "
+                f"{pen_reset_info.get('cleared', 0)} existing record(s)."
+            )
         logger.info("Productivity template populated.")
         progress.progress(55)
 
@@ -506,6 +552,7 @@ def run_automation(
         st.session_state.ptp_filename    = get_output_filename(PTP_PREFIX)
         st.session_state.removed_rows    = removed_df
         st.session_state.reset_info      = reset_info
+        st.session_state.pen_reset_info  = pen_reset_info
         st.session_state.automation_done  = True
         st.session_state.automation_error = None
 

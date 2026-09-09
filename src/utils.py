@@ -166,6 +166,44 @@ PEN_INT_FMT = "#,##0"
 PEN_DUR_FMT = "hh:mm:ss"
 
 
+def month_key(value):
+    """
+    Returns (year, month) for a date/datetime/parseable date string,
+    else None. Slash dates parse day-first (PH dd/mm/yyyy convention);
+    ISO strings use default parsing (dayfirst must NOT touch ISO —
+    pandas applies it to Y-M-D too and swaps them). Only (year, month)
+    is ever compared, so day-level ambiguity cannot matter.
+    """
+    if value is None:
+        return None
+    if isinstance(value, datetime):
+        return (value.year, value.month)
+    if isinstance(value, date):
+        return (value.year, value.month)
+    s = str(value).strip()
+    if s in ("", "nan", "None", "NaT", "NaN", "nat"):
+        return None
+    try:
+        import pandas as pd
+        if re.match(r"^\d{1,2}/\d{1,2}/\d{4}", s):
+            p = pd.to_datetime(s, errors="coerce", dayfirst=True)
+        else:
+            p = pd.to_datetime(s, errors="coerce")
+        if p is None or pd.isna(p):
+            return None
+        return (p.year, p.month)
+    except Exception:
+        return None
+
+
+def month_label(ym) -> str:
+    """(2026, 10) -> 'Oct 2026'."""
+    try:
+        return date(ym[0], ym[1], 1).strftime("%b %Y")
+    except Exception:
+        return f"{ym[0]}-{ym[1]:02d}"
+
+
 def parse_date_value(value):
     """
     Parses a DATE-column value into a datetime.date for Excel output.
@@ -323,6 +361,20 @@ def infer_cell_kind(cell) -> str:
     except Exception:
         return "text"
     if v is None or (isinstance(v, str) and v.strip() == ""):
+        # Empty cell (e.g. a wiped row whose formats survived): infer
+        # from the number format so typing survives a reset.
+        try:
+            fmt = str(getattr(cell, "number_format", "") or "")
+        except Exception:
+            return "text"
+        if "%" in fmt:
+            return "percent"
+        if _is_date_format(fmt):
+            return "date"
+        if _is_time_format(fmt):
+            return "duration"
+        if fmt.strip().lower() not in ("", "general", "@"):
+            return "number"
         return "text"
     if isinstance(v, bool):
         return "text"

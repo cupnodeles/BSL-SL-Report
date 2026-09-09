@@ -14,7 +14,8 @@ from datetime import datetime, date, timedelta
 from openpyxl.utils import get_column_letter, range_boundaries
 from src.utils import (
     get_last_row, clean_date_value, strip_midnight_time,
-    parse_date_value, parse_amount_value, EXCEL_DATE_FMT, EXCEL_AMOUNT_FMT,
+    parse_date_value, parse_amount_value, month_key, month_label,
+    EXCEL_DATE_FMT, EXCEL_AMOUNT_FMT,
 )
 
 logger = logging.getLogger("BPI_BL_SL")
@@ -490,44 +491,10 @@ def _expand_tables(ws, header_row: int, new_last_row: int):
             logger.warning(f"Could not expand table: {e}")
 
 
-def _month_key(value):
-    """
-    Returns (year, month) for a date/datetime/parseable date string,
-    else None. Slash dates parse day-first (PH dd/mm/yyyy convention);
-    ISO strings are unambiguous either way. Only (year, month) is ever
-    compared, so day-level ambiguity cannot matter.
-    """
-    if value is None:
-        return None
-    if isinstance(value, datetime):
-        return (value.year, value.month)
-    if isinstance(value, date):
-        return (value.year, value.month)
-    s = str(value).strip()
-    if s in ("", "nan", "None", "NaT", "NaN", "nat"):
-        return None
-    try:
-        import pandas as pd
-        # Slash dates follow PH dd/mm/yyyy (dayfirst); ISO and everything
-        # else use default parsing. (dayfirst must NOT touch ISO strings
-        # — pandas applies it to Y-M-D too and swaps them.)
-        if re.match(r"^\d{1,2}/\d{1,2}/\d{4}", s):
-            p = pd.to_datetime(s, errors="coerce", dayfirst=True)
-        else:
-            p = pd.to_datetime(s, errors="coerce")
-        if p is None or pd.isna(p):
-            return None
-        return (p.year, p.month)
-    except Exception:
-        return None
-
-
-def _month_label(ym) -> str:
-    """(2026, 10) -> 'Oct 2026'."""
-    try:
-        return date(ym[0], ym[1], 1).strftime("%b %Y")
-    except Exception:
-        return f"{ym[0]}-{ym[1]:02d}"
+# Shared month helpers live in src.utils (also used by productivity.py
+# for the Penetration monthly reset).
+_month_key = month_key
+_month_label = month_label
 
 
 def _incoming_latest_month(ptp_df: pd.DataFrame):

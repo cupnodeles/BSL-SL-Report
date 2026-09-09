@@ -16,6 +16,7 @@ from datetime import datetime, date
 from src.utils import (
     strip_midnight_time, parse_date_value, parse_amount_value,
     parse_percent_value, parse_duration_value, infer_cell_kind,
+    month_key, month_label,
     EXCEL_DATE_FMT, EXCEL_AMOUNT_FMT,
     PEN_PCT_FMT, PEN_INT_FMT, PEN_DUR_FMT,
 )
@@ -435,18 +436,26 @@ def populate_productivity(
     template_file,
     dialer_df: Optional[pd.DataFrame],
     early_df: pd.DataFrame,
-    remedial_df: pd.DataFrame
-) -> io.BytesIO:
+    remedial_df: pd.DataFrame,
+    new_month: bool = False,
+):
     """
     Populates the Productivity Template [4][5]:
-    1. Penetration Per Day  — remove table → append → re-create
-       (SKIPPED when dialer_df is None/empty — sheet left untouched)
+    1. Penetration Per Day  — remove table → (monthly reset?) → append
+       → re-create (SKIPPED when dialer_df is None/empty)
     2. Stat Result Remedial — remove table → clear → paste → re-create
     3. Stat Result Early SL — remove table → clear → paste → re-create
+    Returns (BytesIO, pen_reset_info dict) with Penetration monthly
+    reset details for the UI.
     """
     logger.info("Loading Productivity Template...")
     wb = openpyxl.load_workbook(template_file)
     logger.info(f"Sheets found: {wb.sheetnames}")
+
+    pen_reset_info = {
+        "reset": False, "cleared": 0, "mode": "same-month",
+        "incoming": None, "existing": None, "existing_rows": 0,
+    }
 
     # ------------------------------------------------------------------ #
     # STEP 1: Penetration Per Day (OPTIONAL — skipped without dialer)
@@ -456,6 +465,7 @@ def populate_productivity(
             "No Dialer data provided — skipping 'Penetration Per Day'. "
             "Sheet left as-is from template."
         )
+        pen_reset_info["mode"] = "skipped-no-dialer"
     else:
         pen_sheet      = _find_sheet_exact(wb, [
             "Penetration Per Day", "Penetration", "Per Day"
@@ -477,17 +487,104 @@ def populate_productivity(
                 logger.warning("Penetration header not found. Using row 1.")
 
         pen_last_row = _find_last_data_row_strict(ws_pen, pen_header_row)
+
+        # ------------------------------------------------------ #
+        # Monthly reset decision (Penetration only).
+        # Manual toggle wins; otherwise auto-fire when the dialer
+        # DATE's month is newer than existing rows' latest month.
+        # ------------------------------------------------------ #
+        try:
+            incoming_vals = (
+                dialer_df["DATE"].tolist()
+                if "DATE" in dialer_df.columns
+                else [dialer_df.iloc[0].values[0]]
+            )
+        except Exception:
+            incoming_vals = []
+        incoming_month = None
+        for _v in incoming_vals:
+            _m = month_key(_v)
+            if _m is not None and (
+                incoming_month is None or _m > incoming_month
+            ):
+                incoming_month = _m
+
+        existing_months = []
+        existing_rows = 0
+        for _r in range(pen_header_row + 1, pen_last_row + 1):
+            _cv = ws_pen.cell(row=_r, column=1).value
+            if _cv is None or str(_cv).strip() == "":
+                continue
+            existing_rows += 1
+            _m = month_key(_cv)
+            if _m is not None:
+                existing_months.append(_m)
+        existing_month = max(existing_months) if existing_months else None
+
+        pen_reset_info["existing_rows"] = existing_rows
+        if incoming_month is not None:
+            pen_reset_info["incoming"] = month_label(incoming_month)
+        if existing_month is not None:
+            pen_reset_info["existing"] = month_label(existing_month)
+
+        do_reset, reset_mode = False, "same-month"
+        if incoming_month is None:
+            reset_mode = "no-incoming"
+            logger.info("Dialer DATE unreadable — Penetration reset off.")
+        elif new_month and existing_rows > 0:
+            do_reset, reset_mode = True, "manual"
+        elif new_month:
+            reset_mode = "manual-empty"
+            logger.info("New Month toggle ON but Penetration is empty.")
+        elif (
+            existing_month is not None
+            and incoming_month > existing_month
+        ):
+            do_reset, reset_mode = True, "auto"
+
+        if do_reset:
+            cleared = 0
+            for _r in range(pen_header_row + 1, pen_last_row + 1):
+                _cv = ws_pen.cell(row=_r, column=1).value
+                if _cv is not None and str(_cv).strip() != "":
+                    cleared += 1
+            _clear_below_header(ws_pen, pen_header_row)
+            pen_last_row = pen_header_row
+            # Cleared cells keep their formats — probe there so the new
+            # row follows history typing even right after a wipe.
+            pen_probe_row = (
+                pen_header_row + 1 if cleared > 0 else pen_header_row
+            )
+            pen_reset_info.update(
+                {"reset": True, "cleared": cleared, "mode": reset_mode}
+            )
+            logger.warning(
+                f"Monthly Penetration reset ({reset_mode}): cleared "
+                f"{cleared} existing row(s) "
+                f"(existing {pen_reset_info['existing']} -> "
+                f"incoming {pen_reset_info['incoming']})."
+            )
+        else:
+            pen_reset_info["mode"] = reset_mode
+            pen_probe_row = pen_last_row
+            logger.info(
+                f"No Penetration reset (mode={reset_mode}; "
+                f"existing={pen_reset_info['existing']}, "
+                f"incoming={pen_reset_info['incoming']})."
+            )
+
         pen_next_row = pen_last_row + 1
 
         if pen_last_row > pen_header_row:
             _copy_row_format(ws_pen, pen_last_row, pen_next_row)
 
-        # Probe the last history row so each new value follows the
+        # Probe the history row so each new value follows the
         # existing column format (typed numbers/dates, not text).
+        # After a wipe, probe the cleared row (formats intact).
         # No history yet -> probe cells are empty -> text fallback.
         for c_idx, value in enumerate(dialer_df.iloc[0].values, start=1):
             try:
-                probe = ws_pen.cell(row=pen_last_row, column=c_idx)
+                probe = ws_pen.cell(row=pen_probe_row, column=c_idx)
             except Exception:
                 probe = None
             _write_penetration_cell(
@@ -576,4 +673,4 @@ def populate_productivity(
     wb.save(output)
     output.seek(0)
     logger.info("Productivity Template populated successfully.")
-    return output
+    return output, pen_reset_info
