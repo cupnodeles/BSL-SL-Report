@@ -72,6 +72,19 @@ def setup_logger(log_dir: str = "logs") -> logging.Logger:
 # ------------------------------------------------------------------ #
 # Date cleaning — strips bogus "00:00:00" midnight times from dates
 # ------------------------------------------------------------------ #
+def _np_native(value):
+    """
+    Converts numpy scalars (np.int64 etc. from pandas frames) to plain
+    Python values — numpy ints do NOT subclass int, so parsers would
+    otherwise miss them and fall back to text.
+    """
+    try:
+        import numpy as np
+        if isinstance(value, np.generic):
+            return value.item()
+    except Exception:
+        pass
+    return value
 _MIDNIGHT_SUFFIX_RE = re.compile(
     r"^(?P<date>\d{4}-\d{2}-\d{2}|\d{1,2}/\d{1,2}/\d{4})"
     r"\s+00:00:00(?:\.0+)?$"
@@ -93,6 +106,7 @@ def strip_midnight_time(value):
     - Other strings       -> stripped, unchanged.
     - None / NaN          -> "".
     """
+    value = _np_native(value)
     if value is None:
         return ""
     # pandas NaT / NaN
@@ -136,6 +150,7 @@ def clean_date_value(value):
     - "YYYY-MM-DD HH:MM:SS" / "M/D/YYYY HH:MM" strings -> date part only.
     - Bare date strings -> stripped, unchanged.
     """
+    value = _np_native(value)
     if value is None:
         return ""
     try:
@@ -182,6 +197,7 @@ def month_key(value):
     pandas applies it to Y-M-D too and swaps them). Only (year, month)
     is ever compared, so day-level ambiguity cannot matter.
     """
+    value = _np_native(value)
     if value is None:
         return None
     if isinstance(value, datetime):
@@ -222,6 +238,7 @@ def parse_date_value(value):
     - "2026-01-15", "01/15/2026", "2026-01-15 00:00:00" -> date.
     - Blank/NaN/unparseable -> None.
     """
+    value = _np_native(value)
     if value is None:
         return None
     try:
@@ -263,6 +280,7 @@ def parse_amount_value(value):
     - Blank/NaN/unparseable -> None (cell left blank, never crashes).
     NOTE: blank is NOT zero — callers decide how to treat None.
     """
+    value = _np_native(value)
     if value is None:
         return None
     if isinstance(value, bool):
@@ -309,6 +327,7 @@ def parse_percent_value(value):
     - Plain 9.2177 / "0.0278" -> kept as-is (dialer stores fractions).
     - Blank/NaN/unparseable -> None (cell left blank, never crashes).
     """
+    value = _np_native(value)
     if value is None:
         return None
     if isinstance(value, bool):
@@ -474,6 +493,7 @@ def parse_duration_value(value):
     "MM:SS" strings / numeric fractions in [0, 1) / seconds (>= 1).
     Blank/NaN/unparseable -> None (cell left blank, never crashes).
     """
+    value = _np_native(value)
     if value is None:
         return None
     if isinstance(value, bool):
@@ -515,3 +535,27 @@ def parse_duration_value(value):
             return None
         return total / 86400.0
     return None
+
+
+def format_duration_text(value):
+    """
+    Formats a DURATION value as plain "HH:MM:SS" TEXT (never an Excel
+    time serial — the formula bar must show 02:42:36, not 2:42:36 AM).
+    True zero -> "00:00:00". Blank/unparseable -> None (caller falls
+    back to stripped text, never crashes).
+    """
+    try:
+        frac = parse_duration_value(value)
+    except Exception:
+        return None
+    if frac is None:
+        return None
+    try:
+        total = int(round(frac * 86400))
+        if total < 0:
+            return None
+        h, rem = divmod(total, 3600)
+        mi, sec = divmod(rem, 60)
+        return f"{h:02d}:{mi:02d}:{sec:02d}"
+    except Exception:
+        return None

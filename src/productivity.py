@@ -15,10 +15,10 @@ from typing import Optional
 from datetime import datetime, date
 from src.utils import (
     strip_midnight_time, parse_date_value, parse_amount_value,
-    parse_percent_value, parse_duration_value, infer_cell_kind,
+    parse_percent_value, format_duration_text, infer_cell_kind,
     month_key, month_label,
     EXCEL_DATE_FMT, EXCEL_AMOUNT_FMT,
-    PEN_PCT_FMT, PEN_INT_FMT, PEN_DUR_FMT,
+    PEN_PCT_FMT, PEN_INT_FMT,
 )
 import logging
 
@@ -321,9 +321,8 @@ def _write_penetration_cell(ws, row: int, col: int, value, probe_cell,
     - percent (+percent-history) -> fraction + % format (2.78% style)
     - date (+date-history)       -> real date, history's format or
                                     dd/mm/yyyy fallback
-    - duration (+duration-history) -> fraction of day + time format
-                                    (02:42:36 style, never 00:00:00
-                                    unless the source is truly zero)
+    - duration (+duration-history) -> plain "HH:MM:SS" TEXT (never a
+                                    time serial — no AM/PM)
     - number (+number-history)   -> real number, history's format or
                                     #,##0 fallback for grouped history
     - text                       -> unchanged (names)
@@ -366,13 +365,14 @@ def _write_penetration_cell(ws, row: int, col: int, value, probe_cell,
                     cell.number_format = PEN_INT_FMT
             return
         if kind in ("duration", "duration-history"):
-            dur = parse_duration_value(value)
-            if dur is None:
+            # Plain "HH:MM:SS" TEXT — never an Excel time serial, so the
+            # formula bar shows 02:42:36 (not 2:42:36 AM). Text ignores
+            # number formats, so display matches regardless.
+            txt = format_duration_text(value)
+            if txt is None:
                 cell.value = strip_midnight_time(value)
             else:
-                cell.value = dur
-                if kind == "duration-history":
-                    cell.number_format = PEN_DUR_FMT
+                cell.value = txt
             return
         if prefer_date:
             d = parse_date_value(value)
