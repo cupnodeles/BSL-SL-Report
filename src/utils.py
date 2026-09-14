@@ -181,9 +181,9 @@ EXCEL_DATE_FMT = "dd/mm/yyyy"
 EXCEL_AMOUNT_FMT = "#,##0.00"
 
 # Fallback display formats for the Penetration sheet, used only when the
-# history row gives no usable format. They mimic the existing history
-# style (DD/MM/YYYY dates, 0.00% percents, #,##0 balances, hh:mm:ss times).
-PEN_DATE_FMT = "dd/mm/yyyy"
+# history row gives no usable format. Penetration history is ISO-style,
+# so the date fallback is yyyy-mm-dd (Stat/PTP sheets use EXCEL_DATE_FMT).
+PEN_DATE_FMT = "yyyy-mm-dd"
 PEN_PCT_FMT = "0.00%"
 PEN_INT_FMT = "#,##0"
 PEN_DUR_FMT = "hh:mm:ss"

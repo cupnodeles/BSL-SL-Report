@@ -350,10 +350,11 @@ def _write_penetration_cell(ws, row: int, col: int, value, probe_cell,
             if d is None:
                 cell.value = ""
             else:
-                # DD/MM/YYYY everywhere (user requirement) — real date,
-                # so filters/pivots still recognize it.
+                # Real date (pivot-safe); display follows history —
+                # ISO fallback only when history gives no date format.
                 cell.value = d
-                cell.number_format = EXCEL_DATE_FMT
+                if kind == "date-history":
+                    cell.number_format = PEN_DATE_FMT
             return
         if kind in ("number", "number-history"):
             amt = parse_amount_value(value)
@@ -378,7 +379,7 @@ def _write_penetration_cell(ws, row: int, col: int, value, probe_cell,
             d = parse_date_value(value)
             if d is not None:
                 cell.value = d
-                cell.number_format = EXCEL_DATE_FMT
+                cell.number_format = PEN_DATE_FMT
                 return
         cell.value = strip_midnight_time(value)
     except Exception as e:
