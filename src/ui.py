@@ -114,12 +114,38 @@ def launch_app():
     _init_session_state()
 
     st.title("📊 BSL SL Automation")
+    st.markdown(
+        "Pick your files below, check every slot shows ✅, then press "
+        "**RUN AUTOMATION**. Three steps: **1 Drop → 2 Review → 3 Download**."
+    )
+    # Legibility pass (2026-09-16): larger step headers, high-contrast
+    # uploader + primary button, readable status text on the light theme.
+    st.markdown(
+        """
+        <style>
+        .stSubheader { font-size: 1.25rem; font-weight: 700; }
+        section[data-testid="stFileUploader"] {
+            border: 2px dashed #166b44;
+            border-radius: 0.75rem;
+            padding: 1rem;
+            background: #f4f1e6;
+        }
+        .stButton > button[kind="primary"] {
+            font-size: 1rem;
+            font-weight: 700;
+            padding: 0.6rem 1.5rem;
+        }
+        [data-testid="stStatusWidget"], .stAlert { font-size: 0.95rem; }
+        </style>
+        """,
+        unsafe_allow_html=True,
+    )
     st.markdown("---")
 
     # ------------------------------------------------------------------ #
     # FILE UPLOADS — all files at once, auto-classified by filename
     # ------------------------------------------------------------------ #
-    st.subheader("📁 Upload Input Files")
+    st.subheader("Step 1 — Drop files (all at once, auto-sorted)")
 
     uploaded_files = st.file_uploader(
         "📁 Select all input files at once",
@@ -158,7 +184,7 @@ def launch_app():
     # ------------------------------------------------------------------ #
     # SETTINGS
     # ------------------------------------------------------------------ #
-    st.subheader("⚙️ Settings")
+    st.subheader("Step 2 — Review settings")
 
     # Only enable pivot refresh toggle on Windows with Excel
     if not IS_WINDOWS:
@@ -210,6 +236,7 @@ def launch_app():
     # ------------------------------------------------------------------ #
     # RUN BUTTON — Dialer is OPTIONAL, other 3 files are required
     # ------------------------------------------------------------------ #
+    st.subheader("Step 3 — Run & download")
     required_uploaded = all([drr_file, prod_template, ptp_template])
 
     if not required_uploaded:
