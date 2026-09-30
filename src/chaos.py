@@ -5,9 +5,66 @@
 # session_state toggle + CSS keyframes + emoji floaters. Silent by
 # default; visuals only; pipeline state untouched.
 
+import base64
+import os
+
 import streamlit as st
 
 MEMES = ["🐶", "🚗", "✨", "👾", "🌈", "⚡", "💥", "🛸"]
+
+# Bundled celebration gif (copied from the React app's assets).
+_CELEBRATE_GIF = os.path.join(
+    os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+    "assets",
+    "dogie.gif",
+)
+
+
+def celebrate() -> None:
+    """
+    Floating dogie celebration: rises and fades like balloons did.
+    The gif is embedded as base64 (single self-contained markdown call —
+    no selectors, no static serving needed). Missing file -> classic
+    balloons fallback, so success output can never break on assets.
+    """
+    try:
+        with open(_CELEBRATE_GIF, "rb") as f:
+            b64 = base64.b64encode(f.read()).decode("ascii")
+    except Exception:
+        try:
+            st.balloons()
+        except Exception:
+            pass
+        return
+    st.markdown(
+        f"""
+<style>
+.celebrate-layer {{
+  position: fixed; inset: 0; z-index: 70; pointer-events: none;
+  display: flex; align-items: flex-end; justify-content: center;
+  animation: celebrate-rise 4.5s ease-out forwards;
+}}
+.celebrate-layer img {{
+  width: min(42vw, 380px);
+  border-radius: 1rem;
+  margin-bottom: 6vh;
+}}
+@keyframes celebrate-rise {{
+  0% {{ transform: translateY(60vh); opacity: 0; }}
+  12% {{ opacity: 1; }}
+  70% {{ transform: translateY(-8vh); opacity: 1; }}
+  100% {{ transform: translateY(-30vh); opacity: 0; visibility: hidden; }}
+}}
+@media (prefers-reduced-motion: reduce) {{
+  .celebrate-layer {{ animation: none; display: none; }}
+}}
+</style>
+<div class="celebrate-layer" aria-hidden="true">
+  <img src="data:image/gif;base64,{b64}" alt="celebration" />
+</div>
+""",
+        unsafe_allow_html=True,
+    )
 
 
 def is_chaos() -> bool:
@@ -16,11 +73,6 @@ def is_chaos() -> bool:
 
 def toggle_chaos() -> None:
     st.session_state["chaos"] = not is_chaos()
-    if st.session_state["chaos"]:
-        try:
-            st.balloons()
-        except Exception:
-            pass
 
 
 def inject_chaos_css() -> None:

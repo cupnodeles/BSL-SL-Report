@@ -11,7 +11,7 @@ import streamlit as st
 import logging
 from src.utils import setup_logger, get_output_filename
 from src.theme import inject_hub_css
-from src.chaos import is_chaos, toggle_chaos, inject_chaos_css
+from src.chaos import is_chaos, toggle_chaos, inject_chaos_css, celebrate
 from src.chaos_key import chaos_keypress
 from src.dialer import extract_dialer_data
 from src.drr import (
@@ -108,6 +108,7 @@ def _init_session_state():
         "chaos": False,
         "chaos_dock": False,
         "chaos_key_last": 0,
+        "celebrate_once": False,
     }
     for key, val in defaults.items():
         if key not in st.session_state:
@@ -155,7 +156,14 @@ def launch_app():
             help="Warning: flashing lights. Session-only visual.",
         ):
             toggle_chaos()
+            if is_chaos():
+                # One-shot celebration: survives the rerun below,
+                # renders once, popped so later reruns stay clean.
+                st.session_state.celebrate_once = True
             st.rerun()
+    # One-shot overlay render (set by the handler above).
+    if st.session_state.pop("celebrate_once", False):
+        celebrate()
     try:
         _presses = chaos_keypress()
     except Exception as e:
@@ -675,7 +683,7 @@ def run_automation(
         status.success(
             "✅ Automation complete! Scroll down to download your files."
         )
-        st.balloons()
+        celebrate()
 
     except Exception as e:
         progress.empty()
