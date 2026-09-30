@@ -1,4 +1,6 @@
-openpyxl
-pandas
+streamlit>=1.35,<2
+pandas>=2.1
+openpyxl>=3.1.2
 msoffcrypto-tool
-streamlit
+cryptography
+olefile

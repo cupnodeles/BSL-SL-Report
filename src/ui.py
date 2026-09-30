@@ -10,6 +10,8 @@ import platform
 import streamlit as st
 import logging
 from src.utils import setup_logger, get_output_filename
+from src.theme import inject_hub_css
+from src.chaos import is_chaos, toggle_chaos, inject_chaos_css
 from src.dialer import extract_dialer_data
 from src.drr import (
     clean_drr, split_drr, map_remedial, map_early, drr_latest_date,
@@ -97,6 +99,8 @@ def _init_session_state():
         "pen_reset_info":   None,
         "automation_done":  False,
         "automation_error": None,
+        "hub_theme": "light",
+        "chaos": False,
     }
     for key, val in defaults.items():
         if key not in st.session_state:
@@ -105,47 +109,91 @@ def _init_session_state():
 
 def launch_app():
     st.set_page_config(
-        page_title="BSL SL Automation",
-        page_icon="📊",
-        layout="centered"
+        page_title="BPI Automation SL — BSL Report",
+        page_icon="▚",
+        layout="wide"
     )
 
     # Initialize session state FIRST
     _init_session_state()
 
-    st.title("📊 BSL SL Automation")
+    # Hub theme (light default, night override) — CSS vars only, no reboot.
     st.markdown(
-        "Pick your files below, check every slot shows ✅, then press "
-        "**RUN AUTOMATION**. Three steps: **1 Drop → 2 Review → 3 Download**."
-    )
-    # Legibility pass (2026-09-16): larger step headers, high-contrast
-    # uploader + primary button, readable status text on the light theme.
-    st.markdown(
-        """
-        <style>
-        .stSubheader { font-size: 1.25rem; font-weight: 700; }
-        section[data-testid="stFileUploader"] {
-            border: 2px dashed #166b44;
-            border-radius: 0.75rem;
-            padding: 1rem;
-            background: #f4f1e6;
-        }
-        .stButton > button[kind="primary"] {
-            font-size: 1rem;
-            font-weight: 700;
-            padding: 0.6rem 1.5rem;
-        }
-        [data-testid="stStatusWidget"], .stAlert { font-size: 0.95rem; }
-        </style>
-        """,
+        inject_hub_css(st.session_state.get("hub_theme", "light")),
         unsafe_allow_html=True,
     )
+    # Chaos overlay — session-only visual, silent, pipeline untouched.
+    inject_chaos_css()
+
+    # ---- Sidebar: brand + nav + theme + chaos (mirrors hub Sidebar) ---- #
+    with st.sidebar:
+        st.markdown(
+            """
+            <div class="px-panel">
+              <div class="px-brand">BPI AUTOMATION</div>
+              <div style="font-size:10px;text-transform:uppercase;letter-spacing:.15em;opacity:.75;">
+                Hub v1 · Pixel — BSL SL
+              </div>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
+        st.caption("> BSL SL · active")
+        st.caption("> XDAYS SL · sibling app")
+        theme_label = (
+            "☀ Light mode" if st.session_state.hub_theme == "night"
+            else "☾ Night mode"
+        )
+        if st.button(theme_label, key="btn_hub_theme", use_container_width=True):
+            st.session_state.hub_theme = (
+                "light" if st.session_state.hub_theme == "night" else "night"
+            )
+            st.rerun()
+        chaos_label = "✕ Calm" if is_chaos() else "🌈 Chaos"
+        if st.button(
+            chaos_label,
+            key="btn_chaos",
+            use_container_width=True,
+            help="Warning: flashing lights. Session-only visual, silent.",
+        ):
+            toggle_chaos()
+            st.rerun()
+        if is_chaos():
+            st.caption("Chaos is ON — visuals only, silent. Press Calm to stop.")
+        st.divider()
+        st.caption("Sys.ok · 8-bit UI · Streamlit Cloud safe")
+
+    # ---- Hero (mirrors BslSlPage title + ①②③ intro) ---- #
+    st.markdown(
+        '<h1 class="px-title">▚ BSL SL AUTOMATION</h1>',
+        unsafe_allow_html=True,
+    )
+    st.markdown(
+        "Pick the card below, then follow the steps: "
+        "**① Drop files → ② Check what was detected → ③ Run & download.**"
+    )
+    with st.container():
+        st.markdown(
+            """
+            <div class="px-panel">
+              <span class="badge-pixel">Selected</span>
+              <strong>&nbsp; BSL Report</strong><br/>
+              <span>Dialer + DRR → Productivity &amp; PTP Monitoring reports.
+              Upload the Daily Remark Report, Dialer Report (optional), and the
+              Productivity/PTP templates — download finished, pivot-ready workbooks.</span>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
     st.markdown("---")
 
     # ------------------------------------------------------------------ #
     # FILE UPLOADS — all files at once, auto-classified by filename
     # ------------------------------------------------------------------ #
-    st.subheader("Step 1 — Drop files (all at once, auto-sorted)")
+    st.markdown(
+        '<h2><span class="step-badge">1</span>Drop files — select all input files at once (auto-sorted)</h2>',
+        unsafe_allow_html=True,
+    )
 
     uploaded_files = st.file_uploader(
         "📁 Select all input files at once",
@@ -184,7 +232,10 @@ def launch_app():
     # ------------------------------------------------------------------ #
     # SETTINGS
     # ------------------------------------------------------------------ #
-    st.subheader("Step 2 — Review settings")
+    st.markdown(
+        '<h2><span class="step-badge">2</span>Check — every slot must show ✅ before you can run</h2>',
+        unsafe_allow_html=True,
+    )
 
     # Only enable pivot refresh toggle on Windows with Excel
     if not IS_WINDOWS:
@@ -236,7 +287,10 @@ def launch_app():
     # ------------------------------------------------------------------ #
     # RUN BUTTON — Dialer is OPTIONAL, other 3 files are required
     # ------------------------------------------------------------------ #
-    st.subheader("Step 3 — Run & download")
+    st.markdown(
+        '<h2><span class="step-badge">3</span>Run &amp; download</h2>',
+        unsafe_allow_html=True,
+    )
     required_uploaded = all([drr_file, prod_template, ptp_template])
 
     if not required_uploaded:

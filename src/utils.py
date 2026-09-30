@@ -53,20 +53,28 @@ def setup_logger(log_dir: str = "logs") -> logging.Logger:
     """
     Sets up a logger that writes to /logs/automation_log_{date}.txt
     Creates /logs/ directory if it doesn't exist.
+    Cloud-safe: falls back to stream-only logging when the filesystem
+    is ephemeral or read-only (Streamlit Community Cloud).
     """
-    os.makedirs(log_dir, exist_ok=True)
-    date_str = datetime.today().strftime("%m%d%Y")
-    log_file = os.path.join(log_dir, f"automation_log_{date_str}.txt")
-
-    logging.basicConfig(
-        level=logging.INFO,
-        format="%(asctime)s [%(levelname)s] %(message)s",
-        handlers=[
-            logging.FileHandler(log_file),
-            logging.StreamHandler()
-        ]
-    )
-    return logging.getLogger("BSL_SL")
+    logger = logging.getLogger("BSL_SL")
+    if logger.handlers:
+        return logger
+    logger.setLevel(logging.INFO)
+    formatter = logging.Formatter("%(asctime)s [%(levelname)s] %(message)s")
+    stream_handler = logging.StreamHandler()
+    stream_handler.setFormatter(formatter)
+    logger.addHandler(stream_handler)
+    try:
+        os.makedirs(log_dir, exist_ok=True)
+        date_str = datetime.today().strftime("%m%d%Y")
+        log_file = os.path.join(log_dir, f"automation_log_{date_str}.txt")
+        file_handler = logging.FileHandler(log_file)
+        file_handler.setFormatter(formatter)
+        logger.addHandler(file_handler)
+    except Exception:
+        # Ephemeral/read-only FS on Cloud — stream logging is enough.
+        pass
+    return logger
 
 
 # ------------------------------------------------------------------ #

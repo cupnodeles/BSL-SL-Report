@@ -2,6 +2,10 @@
 headless = true
 enableCORS = false
 enableXsrfProtection = false
+maxUploadSize = 200
+
+[browser]
+gatherUsageStats = false
 
 [theme]
 # Light ops-console theme: readable sans body, green accent shared with the
