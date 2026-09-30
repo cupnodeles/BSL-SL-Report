@@ -18,7 +18,7 @@ from src.utils import (
     parse_percent_value, format_duration_text, infer_cell_kind,
     month_key, month_label,
     EXCEL_DATE_FMT, EXCEL_AMOUNT_FMT,
-    PEN_PCT_FMT, PEN_INT_FMT,
+    PEN_DATE_FMT, PEN_PCT_FMT, PEN_INT_FMT,
 )
 import logging
 
@@ -490,9 +490,11 @@ def populate_productivity(
         pen_last_row = _find_last_data_row_strict(ws_pen, pen_header_row)
 
         # ------------------------------------------------------ #
-        # Monthly reset decision (Penetration only).
-        # Manual toggle wins; otherwise auto-fire when the dialer
-        # DATE's month is newer than existing rows' latest month.
+        # Monthly reset decision (Penetration only) — MANUAL ONLY.
+        # No auto-wipe: cross-month batches (e.g. early-Oct rows while
+        # still closing September) must append, never wipe, unless the
+        # user flips the New Month toggle. Month probing stays for the
+        # results display only.
         # ------------------------------------------------------ #
         try:
             incoming_vals = (
@@ -537,11 +539,6 @@ def populate_productivity(
         elif new_month:
             reset_mode = "manual-empty"
             logger.info("New Month toggle ON but Penetration is empty.")
-        elif (
-            existing_month is not None
-            and incoming_month > existing_month
-        ):
-            do_reset, reset_mode = True, "auto"
 
         if do_reset:
             cleared = 0

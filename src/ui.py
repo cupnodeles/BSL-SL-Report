@@ -12,6 +12,7 @@ import logging
 from src.utils import setup_logger, get_output_filename
 from src.theme import inject_hub_css
 from src.chaos import is_chaos, toggle_chaos, inject_chaos_css
+from src.chaos_key import chaos_keypress
 from src.dialer import extract_dialer_data
 from src.drr import (
     clean_drr, split_drr, map_remedial, map_early, drr_latest_date,
@@ -25,6 +26,10 @@ logger = setup_logger()
 PROD_PREFIX  = "SPM Productivity & Penetration Report_BSL-early&remedial"
 PTP_PREFIX   = "SPM PTP Monitoring Report_BSL-early"
 IS_WINDOWS   = platform.system() == "Windows"
+
+# Repo root (ui.py lives in src/) — for bundled assets like chaos music.
+_APP_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+_CHAOS_MP3 = os.path.join(_APP_ROOT, "assets", "dwa.mp3")
 
 # Bulk-upload slots + filename patterns (case-insensitive substring).
 # Each slot's variants share one common prefix, so matching is
@@ -101,6 +106,8 @@ def _init_session_state():
         "automation_error": None,
         "hub_theme": "light",
         "chaos": False,
+        "chaos_dock": False,
+        "chaos_key_last": 0,
     }
     for key, val in defaults.items():
         if key not in st.session_state:
@@ -124,6 +131,46 @@ def launch_app():
     )
     # Chaos overlay — session-only visual, silent, pipeline untouched.
     inject_chaos_css()
+
+    # ---- Floating chaos dock (bottom-right) ---- #
+    # "`" toggles the chaos button; the button toggles chaos mode.
+    # The keydown component is best-effort (iframe focus); the "`"
+    # button always works. Render order matters: each anchor div must
+    # immediately precede its control for the dock CSS selectors.
+    st.markdown('<div class="chaos-dock-tick"></div>',
+                unsafe_allow_html=True)
+    if st.button("`", key="btn_chaos_dock",
+                 help="Show/hide the chaos button"):
+        st.session_state.chaos_dock = not st.session_state.get(
+            "chaos_dock", False
+        )
+        st.rerun()
+    if st.session_state.get("chaos_dock", False):
+        st.markdown('<div class="chaos-dock-btn"></div>',
+                    unsafe_allow_html=True)
+        chaos_label = "✕ Calm" if is_chaos() else "🌈 Chaos"
+        if st.button(
+            chaos_label,
+            key="btn_chaos",
+            help="Warning: flashing lights. Session-only visual.",
+        ):
+            toggle_chaos()
+            st.rerun()
+    try:
+        _presses = chaos_keypress()
+    except Exception as e:
+        logger.warning(f"Chaos key component unavailable: {e}")
+        _presses = 0
+    if _presses != st.session_state.get("chaos_key_last", 0):
+        st.session_state.chaos_key_last = _presses
+        st.session_state.chaos_dock = not st.session_state.get(
+            "chaos_dock", False
+        )
+        st.rerun()
+    if is_chaos() and os.path.exists(_CHAOS_MP3):
+        st.markdown('<div class="chaos-dock-audio"></div>',
+                    unsafe_allow_html=True)
+        st.audio(_CHAOS_MP3, format="audio/mp3")
 
     # ---- Sidebar: brand + nav + theme + chaos (mirrors hub Sidebar) ---- #
     with st.sidebar:
@@ -149,17 +196,6 @@ def launch_app():
                 "light" if st.session_state.hub_theme == "night" else "night"
             )
             st.rerun()
-        chaos_label = "✕ Calm" if is_chaos() else "🌈 Chaos"
-        if st.button(
-            chaos_label,
-            key="btn_chaos",
-            use_container_width=True,
-            help="Warning: flashing lights. Session-only visual, silent.",
-        ):
-            toggle_chaos()
-            st.rerun()
-        if is_chaos():
-            st.caption("Chaos is ON — visuals only, silent. Press Calm to stop.")
         st.divider()
         st.caption("Sys.ok · 8-bit UI · Streamlit Cloud safe")
 
@@ -272,8 +308,8 @@ def launch_app():
         "🗓 New Month Run",
         value=False,
         help="ON = wipe all existing PTP List AND Penetration records "
-             "before pasting. OFF = auto-wipe a sheet only when incoming "
-             "data is a newer month than its existing records.",
+             "before pasting. OFF = never wipe — every run appends, "
+             "even across months.",
         key="toggle_newmonth",
     )
     if new_month_run:
@@ -409,22 +445,14 @@ def launch_app():
             # ------------------------------------------------------ #
             reset = st.session_state.reset_info
             if reset is not None and reset.get("reset"):
-                if reset.get("mode") == "manual":
-                    how = "manual New Month Run"
-                else:
-                    how = (
-                        f"auto-detected new month "
-                        f"({reset.get('existing')} -> "
-                        f"{reset.get('incoming')})"
-                    )
                 st.warning(
-                    f"🗓 Monthly reset ({how}): cleared "
+                    f"🗓 Monthly reset (manual New Month Run): cleared "
                     f"{reset.get('cleared', 0)} existing PTP record(s) "
                     f"before pasting."
                 )
             elif reset is not None:
                 st.info(
-                    f"📅 Same-month run — kept "
+                    f"📅 Appended — kept "
                     f"{reset.get('existing_rows', 0)} existing PTP "
                     f"record(s)."
                 )
@@ -434,16 +462,9 @@ def launch_app():
             # ------------------------------------------------------ #
             pen_reset = st.session_state.pen_reset_info
             if pen_reset is not None and pen_reset.get("reset"):
-                if pen_reset.get("mode") == "manual":
-                    pen_how = "manual New Month Run"
-                else:
-                    pen_how = (
-                        f"auto-detected new month "
-                        f"({pen_reset.get('existing')} -> "
-                        f"{pen_reset.get('incoming')})"
-                    )
                 st.warning(
-                    f"🗓 Penetration monthly reset ({pen_how}): cleared "
+                    f"🗓 Penetration monthly reset "
+                    f"(manual New Month Run): cleared "
                     f"{pen_reset.get('cleared', 0)} existing record(s) "
                     f"before pasting."
                 )
@@ -453,7 +474,7 @@ def launch_app():
                 st.info("📅 Penetration skipped — no Dialer Report.")
             elif pen_reset is not None:
                 st.info(
-                    f"📅 Same-month run — kept "
+                    f"📅 Appended — kept "
                     f"{pen_reset.get('existing_rows', 0)} existing "
                     f"Penetration record(s)."
                 )
@@ -537,18 +558,10 @@ def run_automation(
             new_month=new_month,
         )
         if pen_reset_info.get("reset"):
-            mode_txt = (
-                "manual New Month Run"
-                if pen_reset_info.get("mode") == "manual"
-                else (
-                    f"auto-detected new month "
-                    f"({pen_reset_info.get('existing')} -> "
-                    f"{pen_reset_info.get('incoming')})"
-                )
-            )
             status.warning(
-                f"🗓 Penetration monthly reset ({mode_txt}): cleared "
-                f"{pen_reset_info.get('cleared', 0)} existing record(s)."
+                f"🗓 Penetration monthly reset (manual New Month Run): "
+                f"cleared {pen_reset_info.get('cleared', 0)} "
+                f"existing record(s)."
             )
         logger.info("Productivity template populated.")
         progress.progress(55)
@@ -584,17 +597,8 @@ def run_automation(
             ptp_bytes, ptp_df, new_month=new_month
         )
         if reset_info.get("reset"):
-            mode_txt = (
-                "manual New Month Run"
-                if reset_info.get("mode") == "manual"
-                else (
-                    f"auto-detected new month "
-                    f"({reset_info.get('existing')} -> "
-                    f"{reset_info.get('incoming')})"
-                )
-            )
             status.warning(
-                f"🗓 Monthly reset ({mode_txt}): cleared "
+                f"🗓 Monthly reset (manual New Month Run): cleared "
                 f"{reset_info.get('cleared', 0)} existing PTP record(s)."
             )
         logger.info(f"PTP rows pasted: {len(ptp_df)}")

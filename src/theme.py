@@ -38,8 +38,8 @@ def inject_hub_css(mode: str = "light") -> str:
     palette = NIGHT_VARS if mode == "night" else LIGHT_VARS
     var_block = "\n".join(f"  {k}: {v};" for k, v in palette.items())
     return f"""
-@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Silkscreen:wght@400;700&display=swap');
 <style>
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Silkscreen:wght@400;700&display=swap');
 :root {{
 {var_block}
   --px: 4px;
@@ -126,5 +126,46 @@ section[data-testid="stFileUploader"] {{
 .stAlert, [data-testid="stStatusWidget"] {{ font-size: 0.95rem; }}
 .block-container {{ max-width: 64rem; }}
 code {{ color: var(--text-main); }}
+/* ---- Floating chaos dock (bottom-right, Cloud-safe, no JS) ---- */
+/* Each anchor div is rendered immediately before its control's block,
+   so the control is styled via the adjacent element-container sibling.
+   Relies only on stable data-testid hooks + source order. */
+div[data-testid="stElementContainer"]:has(.chaos-dock-tick)
++ div[data-testid="stElementContainer"] [data-testid="stButton"] {{
+  position: fixed !important;
+  bottom: 1rem !important;
+  right: 1rem !important;
+  z-index: 60;
+}}
+div[data-testid="stElementContainer"]:has(.chaos-dock-tick)
++ div[data-testid="stElementContainer"] [data-testid="stButton"] > button {{
+  width: 2.5rem !important;
+  min-width: 2.5rem !important;
+  height: 2.5rem !important;
+  border-radius: 9999px !important;
+  font-family: ui-monospace, Menlo, Consolas, monospace !important;
+  font-weight: 700 !important;
+  opacity: 0.55 !important;
+}}
+div[data-testid="stElementContainer"]:has(.chaos-dock-tick)
++ div[data-testid="stElementContainer"] [data-testid="stButton"] > button:hover {{
+  opacity: 1 !important;
+}}
+div[data-testid="stElementContainer"]:has(.chaos-dock-btn)
++ div[data-testid="stElementContainer"] [data-testid="stButton"] {{
+  position: fixed !important;
+  bottom: 4rem !important;
+  right: 1rem !important;
+  z-index: 60;
+}}
+div[data-testid="stElementContainer"]:has(.chaos-dock-audio)
++ div[data-testid="stElementContainer"] [data-testid="stAudio"] {{
+  position: fixed !important;
+  bottom: 7.25rem !important;
+  right: 1rem !important;
+  width: 210px !important;
+  z-index: 60;
+  opacity: 0.85;
+}}
 </style>
 """

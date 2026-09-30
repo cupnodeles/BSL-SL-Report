@@ -585,9 +585,10 @@ def populate_ptp(template_file, ptp_df: pd.DataFrame,
     Auto-fills 'Holding Date' with VALUES (WORKDAY of PTP Date + 2).
     Expands Excel Table(s) to cover new rows.
     Strips midnight "00:00:00" from date values.
-    Monthly reset: when new_month is True, or incoming data's month is
-    newer than existing rows' month, all existing data rows are cleared
-    first (tables shrunk to header-only, then re-expanded).
+    Monthly reset: ONLY the manual New Month toggle wipes existing
+    rows (tables shrunk to header-only, then re-expanded). There is no
+    auto-wipe — same-month and cross-month batches always append unless
+    the toggle is ON.
     Returns (BytesIO, info dict) with reset details for the UI.
     """
     logger.info("Loading PTP Monitoring Template...")
@@ -628,10 +629,11 @@ def populate_ptp(template_file, ptp_df: pd.DataFrame,
     logger.info(f"PTP col index map: {col_index_map}")
 
     # ---------------------------------------------------------- #
-    # Monthly reset decision (PTP List only).
-    # Manual toggle wins; otherwise auto-fire when incoming data's
-    # latest month is newer than existing rows' latest month.
-    # Never wipes when there is nothing incoming to replace with.
+    # Monthly reset decision (PTP List only) — MANUAL TOGGLE ONLY.
+    # No auto-wipe: cross-month batches (e.g. early-Oct rows while
+    # still closing September) must append, never wipe, unless the
+    # user explicitly flips the New Month toggle. Never wipes when
+    # there is nothing incoming to replace with.
     # ---------------------------------------------------------- #
     reset_info = {
         "reset": False, "cleared": 0, "mode": "same-month",
@@ -656,12 +658,6 @@ def populate_ptp(template_file, ptp_df: pd.DataFrame,
     elif new_month:
         reset_mode = "manual-empty"
         logger.info("New Month toggle ON but PTP sheet is already empty.")
-    elif (
-        incoming_month is not None
-        and existing_month is not None
-        and incoming_month > existing_month
-    ):
-        do_reset, reset_mode = True, "auto"
 
     if do_reset:
         cleared = _reset_ptp_data(ws, header_row)

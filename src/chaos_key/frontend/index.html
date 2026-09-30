@@ -1,0 +1,43 @@
+<!DOCTYPE html>
+<!--
+  chaos_key frontend — dependency-free keydown reporter.
+  Speaks the Streamlit Component message protocol by hand (no npm build):
+  RENDER_EVENT handshake + setComponentValue on Backquote presses.
+  LIMITATION (by browser design, not fixable from here): key events only
+  reach this iframe while it has focus. Clicking anywhere else in the app
+  moves focus to the parent document and presses are missed. The floating
+  "`" button in the main UI is the guaranteed control; this is best-effort.
+-->
+<html>
+<head><meta charset="utf-8" /></head>
+<body>
+<script>
+(function () {
+  var presses = 0;
+  function send(value) {
+    window.parent.postMessage({
+      isStreamlitMessage: true,
+      type: "streamlit:setComponentValue",
+      value: value,
+      dataType: "json"
+    }, "*");
+  }
+  function ready() {
+    window.parent.postMessage({
+      isStreamlitMessage: true,
+      type: "streamlit:componentReady",
+      apiVersion: 1
+    }, "*");
+  }
+  window.addEventListener("keydown", function (e) {
+    if (e.code === "Backquote" || e.key === "`") {
+      presses += 1;
+      send(presses);
+    }
+  });
+  if (document.readyState === "complete") { ready(); }
+  else { window.addEventListener("load", ready); }
+})();
+</script>
+</body>
+</html>
