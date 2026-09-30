@@ -129,16 +129,25 @@ code {{ color: var(--text-main); }}
 /* ---- Floating chaos dock (bottom-right, Cloud-safe, no JS) ---- */
 /* Each anchor div is rendered immediately before its control's block,
    so the control is styled via the adjacent element-container sibling.
-   Relies only on stable data-testid hooks + source order. */
+   Both old (stButton/stAudio) and new (stBaseButton-*) testids are
+   covered because Streamlit Cloud may run a newer version than local.
+   Wrapper-level fit-content guarantees the dock can never stretch
+   full-width even if an inner selector misses. */
 div[data-testid="stElementContainer"]:has(.chaos-dock-tick)
-+ div[data-testid="stElementContainer"] [data-testid="stButton"] {{
++ div[data-testid="stElementContainer"] {{
   position: fixed !important;
   bottom: 1rem !important;
   right: 1rem !important;
+  left: auto !important;
+  width: fit-content !important;
+  max-width: 4rem !important;
+  margin-left: auto !important;
   z-index: 60;
 }}
 div[data-testid="stElementContainer"]:has(.chaos-dock-tick)
-+ div[data-testid="stElementContainer"] [data-testid="stButton"] > button {{
++ div[data-testid="stElementContainer"] [data-testid="stButton"] > button,
+div[data-testid="stElementContainer"]:has(.chaos-dock-tick)
++ div[data-testid="stElementContainer"] [data-testid="stBaseButton-secondary"] > button {{
   width: 2.5rem !important;
   min-width: 2.5rem !important;
   height: 2.5rem !important;
@@ -148,21 +157,28 @@ div[data-testid="stElementContainer"]:has(.chaos-dock-tick)
   opacity: 0.55 !important;
 }}
 div[data-testid="stElementContainer"]:has(.chaos-dock-tick)
-+ div[data-testid="stElementContainer"] [data-testid="stButton"] > button:hover {{
++ div[data-testid="stElementContainer"] [data-testid="stButton"] > button:hover,
+div[data-testid="stElementContainer"]:has(.chaos-dock-tick)
++ div[data-testid="stElementContainer"] [data-testid="stBaseButton-secondary"] > button:hover {{
   opacity: 1 !important;
 }}
 div[data-testid="stElementContainer"]:has(.chaos-dock-btn)
-+ div[data-testid="stElementContainer"] [data-testid="stButton"] {{
++ div[data-testid="stElementContainer"] {{
   position: fixed !important;
   bottom: 4rem !important;
   right: 1rem !important;
+  left: auto !important;
+  width: fit-content !important;
+  max-width: 16rem !important;
+  margin-left: auto !important;
   z-index: 60;
 }}
 div[data-testid="stElementContainer"]:has(.chaos-dock-audio)
-+ div[data-testid="stElementContainer"] [data-testid="stAudio"] {{
++ div[data-testid="stElementContainer"] {{
   position: fixed !important;
   bottom: 7.25rem !important;
   right: 1rem !important;
+  left: auto !important;
   width: 210px !important;
   z-index: 60;
   opacity: 0.85;

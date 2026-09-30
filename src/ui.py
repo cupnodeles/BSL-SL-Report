@@ -170,7 +170,17 @@ def launch_app():
     if is_chaos() and os.path.exists(_CHAOS_MP3):
         st.markdown('<div class="chaos-dock-audio"></div>',
                     unsafe_allow_html=True)
-        st.audio(_CHAOS_MP3, format="audio/mp3")
+        # Autoplay works once the browser allows it (the Chaos click
+        # counts as interaction); otherwise the visible player remains.
+        # Guarded: older Streamlit without autoplay/loop falls back.
+        try:
+            st.audio(_CHAOS_MP3, format="audio/mp3",
+                     autoplay=True, loop=True)
+        except TypeError:
+            logger.warning(
+                "st.audio autoplay/loop unsupported here — plain player."
+            )
+            st.audio(_CHAOS_MP3, format="audio/mp3")
 
     # ---- Sidebar: brand + nav + theme + chaos (mirrors hub Sidebar) ---- #
     with st.sidebar:

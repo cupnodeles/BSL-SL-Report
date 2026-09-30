@@ -28,20 +28,20 @@ def inject_chaos_css() -> None:
     if not is_chaos():
         return
     spots = []
-    for i, emoji in enumerate(MEMES * 2):
-        top = (i * 53) % 85
+    for i, emoji in enumerate(MEMES * 3):
+        top = (i * 37) % 85
         spots.append(
             f'<span class="chaos-meme" style="top:{top}vh;'
-            f'animation-duration:{4 + (i % 5)}s;'
-            f'animation-delay:-{(i * 0.7):.1f}s;">{emoji}</span>'
+            f'animation-duration:{3 + (i % 4)}s;'
+            f'animation-delay:-{(i * 0.4):.1f}s;">{emoji}</span>'
         )
     st.markdown(
         """
 <style>
 .chaos-strobe {
   position: fixed; inset: 0; z-index: 45; pointer-events: none;
-  opacity: 0.35; background: #ff0000;
-  animation: chaos-strobe 0.9s steps(1) infinite;
+  opacity: 0.5; background: #ff0000;
+  animation: chaos-strobe 0.5s steps(1) infinite;
 }
 @keyframes chaos-strobe {
   0% { background: #ff0000; } 16% { background: #ffea00; }
@@ -50,25 +50,32 @@ def inject_chaos_css() -> None:
   100% { background: #ff0000; }
 }
 [data-testid="stAppViewContainer"] {
-  animation: chaos-rumble 0.4s steps(2) infinite;
+  animation: chaos-rumble 0.3s steps(2) infinite;
 }
 @keyframes chaos-rumble {
-  0% { transform: translate(0,0); } 25% { transform: translate(-3px,2px); }
-  50% { transform: translate(3px,-3px); } 75% { transform: translate(-2px,-2px); }
-  100% { transform: translate(2px,3px); }
+  0% { transform: translate(0,0); } 25% { transform: translate(-6px,4px); }
+  50% { transform: translate(6px,-6px); } 75% { transform: translate(-4px,-4px); }
+  100% { transform: translate(4px,6px); }
 }
 .px-panel, .px-title {
-  animation: chaos-hue 1.2s linear infinite;
+  animation: chaos-hue 0.7s linear infinite;
 }
 @keyframes chaos-hue {
-  from { filter: hue-rotate(0deg) saturate(2); }
-  to { filter: hue-rotate(360deg) saturate(2); }
+  from { filter: hue-rotate(0deg) saturate(3); }
+  to { filter: hue-rotate(360deg) saturate(3); }
+}
+.px-panel {
+  animation: chaos-hue 0.7s linear infinite, chaos-wobble 0.9s ease-in-out infinite;
+}
+@keyframes chaos-wobble {
+  0%, 100% { transform: rotate(-1deg); }
+  50% { transform: rotate(1deg) translateY(-2px); }
 }
 .chaos-meme-layer {
   position: fixed; inset: 0; z-index: 44; pointer-events: none; overflow: hidden;
 }
 .chaos-meme {
-  position: absolute; left: 0; font-size: 2.2rem; pointer-events: none;
+  position: absolute; left: 0; font-size: 2.8rem; pointer-events: none;
   animation-name: chaos-meme-fly; animation-timing-function: linear;
   animation-iteration-count: infinite;
 }
@@ -79,7 +86,7 @@ def inject_chaos_css() -> None:
 .chaos-btn-on button, .chaos-btn-on > div {
   background: linear-gradient(90deg,#ff0000,#ffea00,#00ff00,#00e5ff,#0033ff,#ff00cc,#ff0000) !important;
   background-size: 600% 100% !important;
-  animation: chaos-btn-slide 0.8s linear infinite;
+  animation: chaos-btn-slide 0.5s linear infinite;
   color: #0b101d !important;
 }
 @keyframes chaos-btn-slide {
