@@ -20,12 +20,26 @@ _CELEBRATE_GIF = os.path.join(
 )
 
 
+# (left %, zoom, duration s, delay s) — a rising shower like balloons.
+_CELEBRATE_SPOTS = [
+    (4, 0.55, 4.2, 0.0),
+    (14, 0.80, 5.0, 0.5),
+    (24, 0.65, 3.8, 1.1),
+    (34, 0.90, 5.4, 0.2),
+    (44, 0.70, 4.6, 1.6),
+    (54, 0.85, 3.6, 0.8),
+    (64, 0.60, 5.2, 2.0),
+    (74, 0.95, 4.4, 0.4),
+    (86, 0.70, 5.0, 1.3),
+]
+
+
 def celebrate() -> None:
     """
-    Floating dogie celebration: rises and fades like balloons did.
-    The gif is embedded as base64 (single self-contained markdown call —
-    no selectors, no static serving needed). Missing file -> classic
-    balloons fallback, so success output can never break on assets.
+    Dogie shower celebration: N dogies rise and fade like balloons did.
+    The gif bytes are embedded ONCE as a shared CSS content rule, so the
+    payload stays ~1.3 MB no matter the instance count. Missing file ->
+    classic balloons fallback, so success output can never break.
     """
     try:
         with open(_CELEBRATE_GIF, "rb") as f:
@@ -36,32 +50,42 @@ def celebrate() -> None:
         except Exception:
             pass
         return
+    spots = "".join(
+        f'<div class="cel c{i}"></div>' for i in range(len(_CELEBRATE_SPOTS))
+    )
+    rules = "\n".join(
+        f".celebrate-layer .c{i} {{ left: {left}%; zoom: {zoom}; "
+        f"animation-duration: {dur}s; animation-delay: {delay}s; }}"
+        for i, (left, zoom, dur, delay) in enumerate(_CELEBRATE_SPOTS)
+    )
     st.markdown(
         f"""
 <style>
 .celebrate-layer {{
   position: fixed; inset: 0; z-index: 70; pointer-events: none;
-  display: flex; align-items: flex-end; justify-content: center;
-  animation: celebrate-rise 4.5s ease-out forwards;
+  overflow: hidden;
 }}
-.celebrate-layer img {{
-  width: min(42vw, 380px);
-  border-radius: 1rem;
-  margin-bottom: 6vh;
+.celebrate-layer .cel::before {{
+  content: url("data:image/gif;base64,{b64}");
 }}
-@keyframes celebrate-rise {{
-  0% {{ transform: translateY(60vh); opacity: 0; }}
-  12% {{ opacity: 1; }}
-  70% {{ transform: translateY(-8vh); opacity: 1; }}
-  100% {{ transform: translateY(-30vh); opacity: 0; visibility: hidden; }}
+.celebrate-layer .cel {{
+  position: absolute; bottom: -25vh;
+  animation-name: cel-rise;
+  animation-timing-function: linear;
+  animation-fill-mode: forwards;
+}}
+{rules}
+@keyframes cel-rise {{
+  0% {{ transform: translateY(0); opacity: 0; }}
+  10% {{ opacity: 1; }}
+  80% {{ opacity: 1; }}
+  100% {{ transform: translateY(-125vh); opacity: 0; visibility: hidden; }}
 }}
 @media (prefers-reduced-motion: reduce) {{
-  .celebrate-layer {{ animation: none; display: none; }}
+  .celebrate-layer {{ display: none; }}
 }}
 </style>
-<div class="celebrate-layer" aria-hidden="true">
-  <img src="data:image/gif;base64,{b64}" alt="celebration" />
-</div>
+<div class="celebrate-layer" aria-hidden="true">{spots}</div>
 """,
         unsafe_allow_html=True,
     )
